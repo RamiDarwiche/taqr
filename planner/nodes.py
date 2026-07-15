@@ -1,6 +1,7 @@
 from typing import Literal
 
 from langchain.messages import AIMessage
+from langchain_core.runnables import RunnableConfig
 from langgraph.graph import END, MessagesState
 from langgraph.prebuilt import ToolNode
 
@@ -21,25 +22,24 @@ run_query_tool = next(t for t in tools if t.name == "sql_db_query")
 run_query_node = ToolNode([run_query_tool], name="run_query")
 
 
-def list_tables(state: MessagesState):
+def list_tables(state: MessagesState, config: RunnableConfig):
     tool_call = {
         "name": "sql_db_list_tables",
         "args": {},
-        "id": "abc123",
         "type": "tool_call",
     }
     tool_call_message = AIMessage(content="", tool_calls=[tool_call])
 
     list_tables_tool = next(t for t in tools if t.name == "sql_db_list_tables")
-    tool_message = list_tables_tool.invoke(tool_call)
+    tool_message = list_tables_tool.invoke(tool_call, config=config)
     response = AIMessage(content=f"Available tables: {tool_message.content}")
 
     return {"messages": [tool_call_message, tool_message, response]}
 
 
-def call_get_schema(state: MessagesState):
+def call_get_schema(state: MessagesState, config: RunnableConfig):
     llm_with_tools = model.bind_tools([get_schema_tool], tool_choice="any")
-    response = llm_with_tools.invoke(state["messages"])
+    response = llm_with_tools.invoke(state["messages"], config=config)
     return {"messages": [response]}
 
 
@@ -61,13 +61,15 @@ DO NOT make any DML statements (INSERT, UPDATE, DELETE, DROP etc.) to the databa
 )
 
 
-def generate_query(state: MessagesState):
+def generate_query(state: MessagesState, config: RunnableConfig):
     system_message = {
         "role": "system",
         "content": generate_query_system_prompt,
     }
     llm_with_tools = model.bind_tools([run_query_tool])
-    response = llm_with_tools.invoke([system_message] + state["messages"])
+    response = llm_with_tools.invoke(
+        [system_message] + state["messages"], config=config
+    )
     return {"messages": [response]}
 
 
@@ -93,7 +95,7 @@ You will call the appropriate tool to execute the query after running this check
 )
 
 
-def check_query(state: MessagesState):
+def check_query(state: MessagesState, config: RunnableConfig):
     system_message = {
         "role": "system",
         "content": check_query_system_prompt,
@@ -101,7 +103,7 @@ def check_query(state: MessagesState):
     tool_call = state["messages"][-1].tool_calls[0]
     user_message = {"role": "user", "content": tool_call["args"]["query"]}
     llm_with_tools = model.bind_tools([run_query_tool], tool_choice="any")
-    response = llm_with_tools.invoke([system_message, user_message])
+    response = llm_with_tools.invoke([system_message, user_message], config=config)
     response.id = state["messages"][-1].id
     return {"messages": [response]}
 

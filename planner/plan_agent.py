@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import pathlib
+import uuid
 
 from langgraph.graph import START, MessagesState, StateGraph
 
+from db import DB
+from planner.callbacks import ProvenanceToolCallback
 from planner.nodes import (
     call_get_schema,
     check_query,
@@ -13,6 +16,7 @@ from planner.nodes import (
     run_query_node,
     should_continue,
 )
+from provenance import QueryLog
 
 builder = StateGraph(MessagesState)
 builder.add_node(list_tables)
@@ -41,9 +45,25 @@ if __name__ == "__main__":
         print(f"Skipped graph.png ({e})")
         print(agent.get_graph().draw_mermaid())
 
+    db = DB()
+    query_log = QueryLog()
+    query_log.connect(db.get_engine())
+
+    session_id = str(uuid.uuid4())
+    run_id = str(uuid.uuid4())
+    callback = ProvenanceToolCallback(query_log, session_id, run_id)
+
     question = "Which chip company had the largest operating income in 2025?"
-    for step in agent.stream(
-        {"messages": [{"role": "user", "content": question}]},
-        stream_mode="values",
-    ):
-        step["messages"][-1].pretty_print()
+    try:
+        for step in agent.stream(
+            {"messages": [{"role": "user", "content": question}]},
+            config={
+                "configurable": {"session_id": session_id, "run_id": run_id},
+                "callbacks": [callback],
+            },
+            stream_mode="values",
+        ):
+            step["messages"][-1].pretty_print()
+    finally:
+        query_log.close()
+        db.disconnect()
