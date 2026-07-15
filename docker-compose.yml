@@ -1,0 +1,19 @@
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: taqr
+      POSTGRES_PASSWORD: taqr
+      POSTGRES_DB: taqr
+    ports:
+      - "5432:5432"
+    volumes:
+      - taqr_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U taqr -d taqr"]
+      interval: 2s
+      timeout: 5s
+      retries: 15
+
+volumes:
+  taqr_pgdata:
