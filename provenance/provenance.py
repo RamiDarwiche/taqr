@@ -14,6 +14,8 @@ from provenance.ddl import (
     _EVENTS_TABLE__DDL,
 )
 
+from provenance.utils import _truncate
+
 
 class RunStatus(Enum):
     RUNNING = "running"
@@ -199,14 +201,3 @@ class QueryLog:
         if error is not None:
             payload["error"] = error
         self.log_event(session_id, run_id, EventType.TOOL_CALL, payload)
-
-
-def _truncate(value: Any, limit: int = 4000) -> Any:
-    if value is None:
-        return None
-    if hasattr(value, "content"):
-        value = value.content
-    text_value = value if isinstance(value, str) else str(value)
-    if len(text_value) <= limit:
-        return text_value
-    return text_value[:limit] + f"... [truncated {len(text_value) - limit} chars]"

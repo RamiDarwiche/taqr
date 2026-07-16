@@ -1,10 +1,9 @@
 from __future__ import annotations
+
 import sys
 from datetime import UTC, datetime
-
-import pathlib
-import uuid
-from typing import Any
+from typing import Any, cast
+from uuid import uuid4, uuid5, NAMESPACE_OID
 
 from langgraph.graph import END, START, MessagesState, StateGraph
 
@@ -22,7 +21,7 @@ from planner.nodes import (
     model_name,
 )
 from planner.schemas import Claim, ClaimType, Evidence, PlanAgentOutput
-from provenance.provenance import EventType, QueryLog, RunStatus
+from provenance import EventType, QueryLog, RunStatus, fingerprint_rows
 
 __all__ = [
     "Claim",
@@ -73,9 +72,9 @@ if __name__ == "__main__":
     query_log.connect(db.get_engine())
 
     # Provenance logging information
-    session_id = str(uuid.uuid4())
-    run_id = str(uuid.uuid4())
-    model_id = str(uuid.uuid5(uuid.NAMESPACE_OID, model_name))
+    session_id = str(uuid4())
+    run_id = str(uuid4())
+    model_id = str(uuid5(NAMESPACE_OID, model_name))
     callback = ProvenanceToolCallback(query_log, session_id, run_id)
     start_ts = datetime.now(UTC)
     query_log.log_run(
@@ -86,9 +85,9 @@ if __name__ == "__main__":
         start_ts=start_ts,
     )
 
-    question = (
-        "Is there a chip company that made more than $150 billion in revenue in 2025?"
-    )
+    if len(sys.argv) != 2:
+        raise RuntimeError("Usage: python -m planner.plan_agent <question>")
+    question = sys.argv[1]
     response = None
     try:
         for step in agent.stream(
@@ -107,6 +106,11 @@ if __name__ == "__main__":
                 }
             else:
                 response = step["messages"][-1].content
+
+        response = cast(dict[str, Any], response)
+        for evidence in response.get("evidence") or []:
+            evidence["result_fingerprint"] = fingerprint_rows(evidence["rows"])
+
         query_log.log_event(
             session_id,
             run_id,

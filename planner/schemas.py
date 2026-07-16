@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from enum import Enum
-from typing import Any, Literal
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -21,7 +21,8 @@ class Evidence(BaseModel):
     rows: list[list[Any]]
     row_count: int
     columns: list[str]
-    result_fingerprint: Literal[None] = None
+    # null from the model; provenance fills a hex digest after the run
+    result_fingerprint: str | None = None
 
 
 class Claim(BaseModel):
