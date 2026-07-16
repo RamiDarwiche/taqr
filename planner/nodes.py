@@ -1,6 +1,9 @@
+from __future__ import annotations
+
+import uuid
 from typing import Literal
 
-from langchain.messages import AIMessage
+from langchain.messages import AIMessage, ToolMessage
 from langchain_core.runnables import RunnableConfig
 from langgraph.graph import END, MessagesState
 from langgraph.prebuilt import ToolNode
@@ -21,11 +24,23 @@ get_schema_node = ToolNode([get_schema_tool], name="get_schema")
 run_query_tool = next(t for t in tools if t.name == "sql_db_query")
 run_query_node = ToolNode([run_query_tool], name="run_query")
 
+SKIP_SCHEMA_TABLES = frozenset({"provenance"})
+
+planner_system_prompt = open("planner/PLANNER_COMPRESSED.md", "r").read().replace(
+    "{top_k}", "5"
+)
+
+_QUERY_NUDGE = (
+    "You must call sql_db_query now with a single PostgreSQL SELECT that answers "
+    "the user's question using the schema already provided. Do not reply in prose."
+)
+
 
 def list_tables(state: MessagesState, config: RunnableConfig):
     tool_call = {
         "name": "sql_db_list_tables",
         "args": {},
+        "id": "abc123",
         "type": "tool_call",
     }
     tool_call_message = AIMessage(content="", tool_calls=[tool_call])
@@ -37,73 +52,93 @@ def list_tables(state: MessagesState, config: RunnableConfig):
     return {"messages": [tool_call_message, tool_message, response]}
 
 
+def _tables_csv_from_state(state: MessagesState) -> str:
+    for msg in reversed(state["messages"]):
+        content = getattr(msg, "content", None)
+        if isinstance(content, str) and content.startswith("Available tables:"):
+            names = [
+                t.strip()
+                for t in content.split(":", 1)[1].split(",")
+                if t.strip() and t.strip() not in SKIP_SCHEMA_TABLES
+            ]
+            return ", ".join(names)
+    return ""
+
+
+def _forced_tool_call(name: str, args: dict) -> AIMessage:
+    return AIMessage(
+        content="",
+        tool_calls=[
+            {
+                "name": name,
+                "args": args,
+                "id": str(uuid.uuid4()),
+                "type": "tool_call",
+            }
+        ],
+    )
+
+
 def call_get_schema(state: MessagesState, config: RunnableConfig):
-    llm_with_tools = model.bind_tools([get_schema_tool], tool_choice="any")
+    # tool_choice is ignored by ChatOllama — ask, then fall back to a forced call.
+    llm_with_tools = model.bind_tools([get_schema_tool])
     response = llm_with_tools.invoke(state["messages"], config=config)
-    return {"messages": [response]}
+    if response.tool_calls:
+        return {"messages": [response]}
+
+    tables = _tables_csv_from_state(state)
+    if not tables:
+        return {"messages": [response]}
+    return {
+        "messages": [
+            _forced_tool_call("sql_db_schema", {"table_names": tables}),
+        ]
+    }
 
 
-generate_query_system_prompt = """
-You are an agent designed to interact with a SQL database.
-Given an input question, create a syntactically correct {dialect} query to run,
-then look at the results of the query and return the answer. Unless the user
-specifies a specific number of examples they wish to obtain, always limit your
-query to at most {top_k} results.
-
-You can order the results by a relevant column to return the most interesting
-examples in the database. Never query for all the columns from a specific table,
-only ask for the relevant columns given the question.
-
-DO NOT make any DML statements (INSERT, UPDATE, DELETE, DROP etc.) to the database.
-""".format(
-    dialect="PostgreSQL",
-    top_k=5,
-)
+def _has_run_query(state: MessagesState) -> bool:
+    return any(
+        isinstance(m, ToolMessage) and m.name == "sql_db_query"
+        for m in state["messages"]
+    )
 
 
 def generate_query(state: MessagesState, config: RunnableConfig):
     system_message = {
         "role": "system",
-        "content": generate_query_system_prompt,
+        "content": planner_system_prompt,
     }
     llm_with_tools = model.bind_tools([run_query_tool])
-    response = llm_with_tools.invoke(
-        [system_message] + state["messages"], config=config
-    )
+    messages = [system_message] + list(state["messages"])
+    response = llm_with_tools.invoke(messages, config=config)
+
+    # First pass: Ollama cannot honor tool_choice, so nudge once if the model
+    # replied in prose instead of calling sql_db_query.
+    if not _has_run_query(state) and not response.tool_calls:
+        response = llm_with_tools.invoke(
+            messages + [{"role": "user", "content": _QUERY_NUDGE}],
+            config=config,
+        )
+
     return {"messages": [response]}
-
-
-check_query_system_prompt = """
-You are a SQL expert with a strong attention to detail.
-Double check the {dialect} query for common mistakes, including:
-- Using NOT IN with NULL values
-- Using UNION when UNION ALL should have been used
-- Using BETWEEN for exclusive ranges
-- Data type mismatch in predicates
-- Properly quoting identifiers
-- Using the correct number of arguments for functions
-- Casting to the correct data type
-- Using the proper columns for joins
-- SQLite-specific syntax that should be Postgres
-
-If there are any of the above mistakes, rewrite the query. If there are no mistakes,
-just reproduce the original query.
-
-You will call the appropriate tool to execute the query after running this check.
-""".format(
-    dialect="PostgreSQL"
-)
 
 
 def check_query(state: MessagesState, config: RunnableConfig):
     system_message = {
         "role": "system",
-        "content": check_query_system_prompt,
+        "content": planner_system_prompt,
     }
-    tool_call = state["messages"][-1].tool_calls[0]
-    user_message = {"role": "user", "content": tool_call["args"]["query"]}
-    llm_with_tools = model.bind_tools([run_query_tool], tool_choice="any")
+    original = state["messages"][-1].tool_calls[0]
+    candidate_query = original["args"]["query"]
+    user_message = {"role": "user", "content": candidate_query}
+    llm_with_tools = model.bind_tools([run_query_tool])
     response = llm_with_tools.invoke([system_message, user_message], config=config)
+
+    # If the model reviewed in prose and skipped the tool call, execute the
+    # original candidate so the graph does not stall.
+    if not response.tool_calls:
+        response = _forced_tool_call("sql_db_query", {"query": candidate_query})
+
     response.id = state["messages"][-1].id
     return {"messages": [response]}
 

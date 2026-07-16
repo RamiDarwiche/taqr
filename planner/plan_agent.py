@@ -38,12 +38,12 @@ agent = builder.compile()
 
 
 if __name__ == "__main__":
-    try:
-        pathlib.Path("graph.png").write_bytes(agent.get_graph().draw_mermaid_png())
-        print("Wrote graph.png")
-    except Exception as e:
-        print(f"Skipped graph.png ({e})")
-        print(agent.get_graph().draw_mermaid())
+    # try:
+    #     pathlib.Path("graph.png").write_bytes(agent.get_graph().draw_mermaid_png())
+    #     print("Wrote graph.png")
+    # except Exception as e:
+    #     print(f"Skipped graph.png ({e})")
+    #     print(agent.get_graph().draw_mermaid())
 
     db = DB()
     query_log = QueryLog()
@@ -53,7 +53,7 @@ if __name__ == "__main__":
     run_id = str(uuid.uuid4())
     callback = ProvenanceToolCallback(query_log, session_id, run_id)
 
-    question = "Which chip company had the largest operating income in 2025?"
+    question = "What is the most widely manufactured ai chip?"
     try:
         for step in agent.stream(
             {"messages": [{"role": "user", "content": question}]},
