@@ -6,7 +6,7 @@ from uuid import UUID
 
 from langchain_core.callbacks import BaseCallbackHandler
 
-from provenance import QueryLog
+from provenance.provenance import QueryLog
 
 
 class ProvenanceToolCallback(BaseCallbackHandler):

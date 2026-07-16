@@ -10,7 +10,7 @@ from sqlalchemy import inspect, text
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 
 from db import DB
-from provenance import EventType, QueryLog
+from provenance.provenance import EventType, QueryLog
 from samples import download_datasets
 
 query_log = QueryLog()

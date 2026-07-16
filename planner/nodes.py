@@ -9,12 +9,15 @@ from langgraph.graph import END, MessagesState
 from langgraph.prebuilt import ToolNode
 
 from planner.llm import model
+from planner.schemas import PlanAgentOutput
 from planner.tools import (
     sql_db_list_tables,
     sql_db_query,
     sql_db_query_checker,
     sql_db_schema,
 )
+
+model_name = getattr(model, "model_name", None) or getattr(model, "model", None)
 
 tools = [sql_db_list_tables, sql_db_schema, sql_db_query, sql_db_query_checker]
 
@@ -25,14 +28,23 @@ run_query_tool = next(t for t in tools if t.name == "sql_db_query")
 run_query_node = ToolNode([run_query_tool], name="run_query")
 
 SKIP_SCHEMA_TABLES = frozenset({"provenance"})
+MAX_SQL_ATTEMPTS = 5
 
-planner_system_prompt = open("planner/PLANNER_COMPRESSED.md", "r").read().replace(
-    "{top_k}", "5"
+planner_system_prompt = (
+    open("planner/PLANNER_COMPRESSED.md", "r").read().replace("{top_k}", "5")
 )
 
 _QUERY_NUDGE = (
     "You must call sql_db_query now with a single PostgreSQL SELECT that answers "
     "the user's question using the schema already provided. Do not reply in prose."
+)
+
+_EMIT_CLAIMS_PROMPT = (
+    "Using only successful sql_db_query tool results already in this conversation, "
+    "emit claims and evidence. Copy sql and rows verbatim from tool output — "
+    "never invent or round values. Derive columns from SELECT aliases. "
+    "Set result_fingerprint to null. Every evidence_ids entry must match an "
+    "evidence.id you include."
 )
 
 
@@ -97,19 +109,29 @@ def call_get_schema(state: MessagesState, config: RunnableConfig):
 
 
 def _has_run_query(state: MessagesState) -> bool:
-    return any(
-        isinstance(m, ToolMessage) and m.name == "sql_db_query"
+    return _sql_attempt_count(state) > 0
+
+
+def _sql_attempt_count(state: MessagesState) -> int:
+    """Count completed sql_db_query tool results (authoritative attempt budget)."""
+    return sum(
+        1
         for m in state["messages"]
+        if isinstance(m, ToolMessage) and m.name == "sql_db_query"
     )
 
 
 def generate_query(state: MessagesState, config: RunnableConfig):
+    # Attempt budget exhausted — emit_claims will produce the structured answer.
+    if _sql_attempt_count(state) >= MAX_SQL_ATTEMPTS:
+        return {}
+
     system_message = {
         "role": "system",
         "content": planner_system_prompt,
     }
-    llm_with_tools = model.bind_tools([run_query_tool])
     messages = [system_message] + list(state["messages"])
+    llm_with_tools = model.bind_tools([run_query_tool])
     response = llm_with_tools.invoke(messages, config=config)
 
     # First pass: Ollama cannot honor tool_choice, so nudge once if the model
@@ -120,7 +142,11 @@ def generate_query(state: MessagesState, config: RunnableConfig):
             config=config,
         )
 
-    return {"messages": [response]}
+    # Only keep tool-call turns here. Free-form "answers" are discarded so
+    # emit_claims can enforce PlanAgentOutput instead.
+    if response.tool_calls:
+        return {"messages": [response]}
+    return {}
 
 
 def check_query(state: MessagesState, config: RunnableConfig):
@@ -143,8 +169,38 @@ def check_query(state: MessagesState, config: RunnableConfig):
     return {"messages": [response]}
 
 
-def should_continue(state: MessagesState) -> Literal["check_query", "__end__"]:
+def emit_claims(state: MessagesState, config: RunnableConfig):
+    system_message = {
+        "role": "system",
+        "content": planner_system_prompt,
+    }
+    structured = model.with_structured_output(PlanAgentOutput)
+    result = structured.invoke(
+        [system_message]
+        + list(state["messages"])
+        + [{"role": "user", "content": _EMIT_CLAIMS_PROMPT}],
+        config=config,
+    )
+    if not isinstance(result, PlanAgentOutput):
+        result = PlanAgentOutput.model_validate(result)
+
+    return {
+        "messages": [AIMessage(content=result.model_dump_json())],
+        "claims": [c.model_dump() for c in result.claims],
+        "evidence": [e.model_dump() for e in result.evidence],
+    }
+
+
+def should_continue(
+    state: MessagesState,
+) -> Literal["check_query", "emit_claims", "__end__"]:
+    attempts = _sql_attempt_count(state)
+    if attempts >= MAX_SQL_ATTEMPTS:
+        return "emit_claims"
+
     last_message = state["messages"][-1]
-    if not last_message.tool_calls:
-        return END
-    return "check_query"
+    if getattr(last_message, "tool_calls", None):
+        return "check_query"
+    if attempts > 0:
+        return "emit_claims"
+    return END
