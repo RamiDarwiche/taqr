@@ -1,4 +1,5 @@
 from __future__ import annotations
+from logger import logger
 
 import pathlib
 import sys
@@ -86,7 +87,7 @@ class PlanAgent:
                 },
                 stream_mode="values",
             ):
-                step["messages"][-1].pretty_print()
+                logger.trace(step["messages"][-1].pretty_repr())
                 if step.get("claims") is not None:
                     response = PlanAgentOutput.model_validate(
                         {

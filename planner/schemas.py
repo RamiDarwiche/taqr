@@ -7,12 +7,12 @@ from pydantic import BaseModel, Field
 
 
 class ClaimType(str, Enum):
-    ranking_top_k = "ranking_top_k"
-    aggregation = "aggregation"
-    comparison = "comparison"
-    trend = "trend"
-    existence = "existence"
-    distribution = "distribution"
+    RANKING_TOP_K = "ranking_top_k"
+    AGGREGATION = "aggregation"
+    COMPARISON = "comparison"
+    TREND = "trend"
+    EXISTENCE = "existence"
+    DISTRIBUTION = "distribution"
 
 
 class Evidence(BaseModel):
