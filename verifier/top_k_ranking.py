@@ -33,17 +33,17 @@ def verify_top_k_ranking(
         with engine.connect() as conn:
             rows = [list(row) for row in conn.execute(text(e.sql)).fetchall()]
         if len(rows) != k:
-            logger.error(f"Row count mismatch for evidence {e.id}")
-            logger.error(f"Expected: {k}")
-            logger.error(f"Actual: {len(rows)}")
+            logger.error(
+                f"Row count mismatch for evidence {e.id}\nExpected: {k}\nActual: {len(rows)}"
+            )
             result.status = VerificationStatus.FAILED
             result.failure_reason = f"expected {k} rows, got {len(rows)}"
             return result
         result.checks.append("top_k_row_count")
         if rows[0][0] != claim.subject:
-            logger.error(f"Subject mismatch for evidence {e.id}")
-            logger.error(f"Expected: {claim.subject}")
-            logger.error(f"Actual: {rows[0][0]}")
+            logger.error(
+                f"Subject mismatch for evidence {e.id}\nExpected: {claim.subject}\nActual: {rows[0][0]}"
+            )
             result.status = VerificationStatus.FAILED
             result.failure_reason = (
                 f"subject mismatch: expected {claim.subject!r}, got {rows[0][0]!r}"

@@ -100,6 +100,7 @@ def verify_response(
         ],
     )
 
+    # Verify general integrity of the response
     if not claims:
         logger.error("No claims were returned by the plan agent")
         verified.status = VerificationStatus.FAILED
@@ -141,6 +142,7 @@ def verify_response(
         )
     _append_checks(verified, ["metric"])
 
+    # Verify each claim, dispatch to specialized verifiers
     results_by_id = {r.claim_id: r for r in verified.claim_results}
     for claim in claims:
         logger.info(f"Verifying claim {claim.id}: {claim.claim_text}")
@@ -163,6 +165,17 @@ def verify_response(
 
 
 def verify_hashes(evidence: list[Evidence], engine: Engine) -> bool:
+    """Given the SQL and result rows of an evidence item, reruns the SQL and computes hash of the resulting rows to
+    determine the consistency of the database state and the evidence item. If the hashes are not equal, the underlying
+    data may have changed or the plan agent may have generated malformed evidence.
+
+    :param evidence: The evidence items to verify
+    :type evidence: list[Evidence]
+    :param engine: The database engine to use for executing SQL queries
+    :type engine: Engine
+    :return: True if the hashes are equal, False otherwise
+    :rtype: bool
+    """
     for e in evidence:
         if not e.result_fingerprint or not e.sql:
             logger.error(f"Evidence {e.id} has no result fingerprint or SQL")
@@ -172,20 +185,30 @@ def verify_hashes(evidence: list[Evidence], engine: Engine) -> bool:
             result = conn.execute(text(e.sql))
             rows = [list(row) for row in result.fetchall()]
             if len(rows) != e.row_count:
-                logger.error(f"Row count mismatch for evidence {e.id}")
-                logger.error(f"Expected: {e.row_count}")
-                logger.error(f"Actual: {len(rows)}")
+                logger.error(
+                    f"Row count mismatch for evidence {e.id}\nExpected: {e.row_count}\nActual: {len(rows)}"
+                )
                 return False
             if fingerprint_rows(rows) != e.result_fingerprint:
-                logger.error(f"Hash mismatch for evidence {e.id}")
-                logger.error(f"Expected: {e.result_fingerprint}")
-                logger.error(f"Actual: {fingerprint_rows(rows)}")
+                logger.error(
+                    f"Hash mismatch for evidence {e.id}\nExpected: {e.result_fingerprint}\nActual: {fingerprint_rows(rows)}"
+                )
                 return False
             logger.info(f"Hash verified for evidence {e.id}")
     return True
 
 
 def verify_metrics(claims: list[Claim], evidence: list[Evidence]) -> bool:
+    """Each claim will have metrics associated with it. This function verifies that the metrics semantically resolved by
+    the plan agent are present in at least one of the referenced evidence items.
+
+    :param claims: The claims to verify
+    :type claims: list[Claim]
+    :param evidence: The evidence items to verify
+    :type evidence: list[Evidence]
+    :return: True if the metrics are present in at least one of the referenced evidence items, False otherwise
+    :rtype: bool
+    """
     for claim in claims:
         if not claim.metric:
             continue
