@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 import json
-from enum import Enum
 from typing import Any
 
 from sqlalchemy import inspect, text
 from sqlalchemy.engine import Engine
 
+from domain_types import EventType, RunStatus
 from provenance.ddl import (
     _EVENTS_TABLE__DDL,
     _MODELS_TABLE__DDL,
@@ -14,18 +14,6 @@ from provenance.ddl import (
     _RUNS_TABLE__DDL,
 )
 from provenance.utils import _truncate
-
-
-class RunStatus(Enum):
-    RUNNING = "running"
-    COMPLETED = "completed"
-    FAILED = "failed"
-
-
-class EventType(Enum):
-    QUERY = "query"
-    TOOL_CALL = "tool_call"
-    QUERY_RESPONSE = "query_response"
 
 
 class QueryLog:

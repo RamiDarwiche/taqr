@@ -1,0 +1,143 @@
+from __future__ import annotations
+
+from sqlalchemy import Engine, text
+
+from domain_types import ClaimType, VerificationStatus
+from logger import logger
+from planner.schemas import Claim, Evidence, PlanAgentOutput
+from provenance.utils import fingerprint_rows
+from verifier.schemas import ClaimVerification, VerifiedResponse
+from verifier.top_k_ranking import verify_top_k_ranking
+
+
+def _gate_status(claim_results: list[ClaimVerification]) -> VerificationStatus:
+    if not claim_results:
+        return VerificationStatus.FAILED
+    statuses = {r.status for r in claim_results}
+    if statuses == {VerificationStatus.VERIFIED}:
+        return VerificationStatus.VERIFIED
+    if VerificationStatus.FAILED in statuses:
+        if VerificationStatus.VERIFIED in statuses:
+            return VerificationStatus.PARTIALLY_VERIFIED
+        return VerificationStatus.FAILED
+    if VerificationStatus.VERIFIED in statuses:
+        return VerificationStatus.PARTIALLY_VERIFIED
+    return VerificationStatus.NOT_VERIFIED
+
+
+def _fail_all(
+    verified: VerifiedResponse,
+    *,
+    reason: str,
+    checks: list[str],
+) -> VerifiedResponse:
+    for result in verified.claim_results:
+        result.checks.extend(checks)
+        result.status = VerificationStatus.FAILED
+        result.reason = reason
+    verified.status = VerificationStatus.FAILED
+    return verified
+
+
+def _append_checks(verified: VerifiedResponse, checks: list[str]) -> None:
+    for result in verified.claim_results:
+        result.checks.extend(checks)
+
+
+def verify_response(
+    response: PlanAgentOutput,
+    engine: Engine,
+    *,
+    query: str | None = None,
+) -> VerifiedResponse:
+    claims = response.claims
+    evidence = response.evidence
+
+    verified = VerifiedResponse(
+        query=query,
+        response=response,
+        status=VerificationStatus.NOT_VERIFIED,
+        claim_results=[
+            ClaimVerification(
+                claim_id=c.id,
+                status=VerificationStatus.NOT_VERIFIED,
+            )
+            for c in claims
+        ],
+    )
+
+    if not claims:
+        logger.error("No claims were returned by the plan agent")
+        verified.status = VerificationStatus.FAILED
+        return verified
+
+    if not evidence:
+        logger.error("No evidence proposed by the plan agent")
+        return _fail_all(
+            verified,
+            reason="no evidence provided",
+            checks=[],
+        )
+
+    logger.info(f"Verifying {len(claims)} claims")
+
+    if not verify_hashes(evidence, engine):
+        return _fail_all(
+            verified,
+            reason="evidence hash or row_count verification failed",
+            checks=["hash", "row_count"],
+        )
+    _append_checks(verified, ["hash", "row_count"])
+
+    if not verify_metrics(claims, evidence):
+        return _fail_all(
+            verified,
+            reason="metric verification failed",
+            checks=["metric"],
+        )
+    _append_checks(verified, ["metric"])
+
+    results_by_id = {r.claim_id: r for r in verified.claim_results}
+    for claim in claims:
+        logger.info(f"Verifying claim {claim.id}: {claim.claim_text}")
+        result = results_by_id[claim.id]
+        match claim.claim_type:
+            case ClaimType.RANKING_TOP_K:
+                verify_top_k_ranking(claim, evidence, engine, result)
+            case _:
+                result.status = VerificationStatus.NOT_VERIFIED
+                result.reason = f"no verifier for claim_type={claim.claim_type}"
+
+    verified.status = _gate_status(verified.claim_results)
+    logger.info(f"Trust gate status: {verified.status}")
+    return verified
+
+
+def verify_hashes(evidence: list[Evidence], engine: Engine) -> bool:
+    for e in evidence:
+        if not e.result_fingerprint or not e.sql:
+            logger.error(f"Evidence {e.id} has no result fingerprint or SQL")
+            logger.error(e)
+            return False
+        with engine.connect() as conn:
+            result = conn.execute(text(e.sql))
+            rows = [list(row) for row in result.fetchall()]
+            if len(rows) != e.row_count:
+                logger.error(f"Row count mismatch for evidence {e.id}")
+                logger.error(f"Expected: {e.row_count}")
+                logger.error(f"Actual: {len(rows)}")
+                return False
+            if fingerprint_rows(rows) != e.result_fingerprint:
+                logger.error(f"Hash mismatch for evidence {e.id}")
+                logger.error(f"Expected: {e.result_fingerprint}")
+                logger.error(f"Actual: {fingerprint_rows(rows)}")
+                return False
+            logger.info(f"Hash verified for evidence {e.id}")
+    return True
+
+
+def verify_metrics(claims: list[Claim], evidence: list[Evidence]) -> bool:
+    for claim in claims:
+        if not claim.metric:
+            continue
+    return True

@@ -11,6 +11,7 @@ from db import DB
 from planner import PlanAgent
 from provenance.query_log import QueryLog
 from samples import download_datasets
+from logger import logger
 import verifier
 
 # is this proper fastapi?
@@ -55,7 +56,8 @@ plan_agent = PlanAgent(db, query_log)
 question = "What is the most widely manufactured AI chip in the dataset?"
 session_id = str(uuid.uuid4())
 plan = plan_agent.ask(question, session_id)
-verifier.verify_response(plan, db.get_engine())
+verified = verifier.verify_response(plan, db.get_engine(), query=question)
+logger.info(verified.model_dump(mode="json"))
 
 query_log.close()
 db.disconnect()

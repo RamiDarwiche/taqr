@@ -14,12 +14,13 @@ from planner.callbacks import ProvenanceToolCallback
 from planner.nodes import emit_claims, make_planner_nodes, model_name, should_continue
 from planner.schemas import (
     Claim,
-    ClaimType,
     Evidence,
     PlanAgentOutput,
     QueryResponsePayload,
 )
-from provenance import EventType, QueryLog, RunStatus, fingerprint_rows
+from domain_types import ClaimType, EventType, RunStatus
+from provenance import QueryLog, fingerprint_rows
+
 
 __all__ = [
     "Claim",

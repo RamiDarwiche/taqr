@@ -1,18 +1,11 @@
 from __future__ import annotations
 
-from enum import Enum
+import uuid
 from typing import Any
 
 from pydantic import BaseModel, Field
 
-
-class ClaimType(str, Enum):
-    RANKING_TOP_K = "ranking_top_k"
-    AGGREGATION = "aggregation"
-    COMPARISON = "comparison"
-    TREND = "trend"
-    EXISTENCE = "existence"
-    DISTRIBUTION = "distribution"
+from domain_types import ClaimType
 
 
 class Evidence(BaseModel):
@@ -26,6 +19,7 @@ class Evidence(BaseModel):
 
 
 class Claim(BaseModel):
+    id: uuid.UUID = Field(default_factory=uuid.uuid4)
     claim_text: str
     claim_type: ClaimType
     subject: str | list[str] | None = None
