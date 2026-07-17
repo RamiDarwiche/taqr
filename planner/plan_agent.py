@@ -39,92 +39,81 @@ class PlanAgentState(MessagesState):
     evidence: list[dict[str, Any]]
 
 
-builder = StateGraph(PlanAgentState)
-builder.add_node(list_tables)
-builder.add_node(call_get_schema)
-builder.add_node(get_schema_node, "get_schema")
-builder.add_node(generate_query)
-builder.add_node(check_query)
-builder.add_node(run_query_node, "run_query")
-builder.add_node(emit_claims)
+class PlanAgent:
+    def __init__(self, db: DB, query_log: QueryLog):
+        self.db = db
+        self.query_log = query_log
 
-builder.add_edge(START, "list_tables")
-builder.add_edge("list_tables", "call_get_schema")
-builder.add_edge("call_get_schema", "get_schema")
-builder.add_edge("get_schema", "generate_query")
-builder.add_conditional_edges("generate_query", should_continue)
-builder.add_edge("check_query", "run_query")
-builder.add_edge("run_query", "generate_query")
-builder.add_edge("emit_claims", END)
+        self.builder = StateGraph(PlanAgentState)
+        self.builder.add_node(list_tables)
+        self.builder.add_node(call_get_schema)
+        self.builder.add_node(get_schema_node, "get_schema")
+        self.builder.add_node(generate_query)
+        self.builder.add_node(check_query)
+        self.builder.add_node(run_query_node, "run_query")
+        self.builder.add_node(emit_claims)
 
-agent = builder.compile()
+        self.builder.add_edge(START, "list_tables")
+        self.builder.add_edge("list_tables", "call_get_schema")
+        self.builder.add_edge("call_get_schema", "get_schema")
+        self.builder.add_edge("get_schema", "generate_query")
+        self.builder.add_conditional_edges("generate_query", should_continue)
+        self.builder.add_edge("check_query", "run_query")
+        self.builder.add_edge("run_query", "generate_query")
+        self.builder.add_edge("emit_claims", END)
+        self.agent = self.builder.compile()
 
-
-if __name__ == "__main__":
-    try:
-        pathlib.Path("graph.png").write_bytes(agent.get_graph().draw_mermaid_png())
-        print("Wrote graph.png")
-    except Exception as e:
-        print(f"Skipped graph.png ({e})")
-        print(agent.get_graph().draw_mermaid())
-
-    db = DB()
-    query_log = QueryLog()
-    query_log.connect(db.get_engine())
-
-    # Provenance logging information
-    session_id = str(uuid4())
-    run_id = str(uuid4())
-    model_id = str(uuid5(NAMESPACE_OID, model_name))
-    callback = ProvenanceToolCallback(query_log, session_id, run_id)
-    start_ts = datetime.now(UTC)
-    query_log.log_run(
-        session_id=session_id,
-        run_id=run_id,
-        model_id=model_id,
-        model_name=model_name,
-        start_ts=start_ts,
-    )
-
-    if len(sys.argv) != 2:
-        raise RuntimeError("Usage: python -m planner.plan_agent <question>")
-    question = sys.argv[1]
-    response = None
-    try:
-        for step in agent.stream(
-            {"messages": [{"role": "user", "content": question}]},
-            config={
-                "configurable": {"session_id": session_id, "run_id": run_id},
-                "callbacks": [callback],
-            },
-            stream_mode="values",
-        ):
-            step["messages"][-1].pretty_print()
-            if step.get("claims") is not None:
-                response = {
-                    "claims": step["claims"],
-                    "evidence": step.get("evidence"),
-                }
-            else:
-                response = step["messages"][-1].content
-
-        response = cast("dict[str, Any]", response)
-        for evidence in response.get("evidence") or []:
-            evidence["result_fingerprint"] = fingerprint_rows(evidence["rows"])
-
-        query_log.log_event(
-            session_id,
-            run_id,
-            EventType.QUERY_RESPONSE,
-            {
-                "query": question,
-                "response": response,
-            },
+    # better error handling, more modularity?
+    # testing will probably make these more necessary
+    def ask(self, question: str, session_id: str):
+        run_id = str(uuid4())
+        model_id = str(uuid5(NAMESPACE_OID, model_name))
+        start_ts = datetime.now(UTC)
+        logging_callback = ProvenanceToolCallback(self.query_log, session_id, run_id)
+        self.query_log.log_run(
+            session_id=session_id,
+            run_id=run_id,
+            model_id=model_id,
+            model_name=model_name,
+            start_ts=start_ts,
         )
-    finally:
-        run_status = RunStatus.COMPLETED
-        if err := sys.exception():
-            run_status = RunStatus.FAILED
-        query_log.finish_run(run_id, run_status, datetime.now(UTC), str(err))
-        query_log.close()
-        db.disconnect()
+
+        response = None
+        try:
+            for step in self.agent.stream(
+                {"messages": [{"role": "user", "content": question}]},
+                config={
+                    "configurable": {"session_id": session_id, "run_id": run_id},
+                    "callbacks": [logging_callback],
+                },
+                stream_mode="values",
+            ):
+                step["messages"][-1].pretty_print()
+                if step.get("claims") is not None:
+                    response = {
+                        "claims": step["claims"],
+                        "evidence": step.get("evidence"),
+                    }
+                else:
+                    response = step["messages"][-1].content
+
+            response = cast("dict[str, Any]", response)
+            for evidence in response.get("evidence") or []:
+                evidence["result_fingerprint"] = fingerprint_rows(evidence["rows"])
+
+            self.query_log.log_event(
+                session_id,
+                run_id,
+                EventType.QUERY_RESPONSE,
+                {
+                    "query": question,
+                    "response": response,
+                },
+            )
+        finally:
+            run_status = RunStatus.COMPLETED
+            if err := sys.exception():
+                run_status = RunStatus.FAILED
+            self.query_log.finish_run(run_id, run_status, datetime.now(UTC), str(err))
+
+        return response
