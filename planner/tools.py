@@ -42,7 +42,8 @@ def sql_db_list_tables() -> str:
 def sql_db_schema(table_names: str) -> str:
     """Input to this tool is a comma-separated list of tables, output is the schema and sample rows for those tables.
     Be sure that the tables actually exist by calling sql_db_list_tables first!
-    Example Input: table1, table2, table3"""
+    Example Input: table1, table2, table3
+    """
     valid_tables = set(_list_table_names())
     results: list[str] = []
 
@@ -56,7 +57,7 @@ def sql_db_schema(table_names: str) -> str:
         try:
             with _db.get_engine().connect() as conn:
                 rows = conn.execute(
-                    text(f"SELECT * FROM {_quote_ident(table)} LIMIT 3")
+                    text(f"SELECT * FROM {_quote_ident(table)} LIMIT 3"),
                 ).fetchall()
                 if rows:
                     col_names = list(rows[0]._mapping.keys())
@@ -65,7 +66,7 @@ def sql_db_schema(table_names: str) -> str:
                         + "\t".join(col_names)
                         + "\n"
                         + "\n".join("\t".join(str(x) for x in row) for row in rows)
-                        + "\n*/"
+                        + "\n*/",
                     )
         except Exception as e:
             results.append(f"Error fetching sample rows: {e}")
@@ -86,31 +87,3 @@ def sql_db_query(query: str) -> str:
             return str(result.fetchall())
     except Exception as e:
         return f"Error: {e}"
-
-
-@tool
-def sql_db_query_checker(query: str) -> str:
-    """Use this tool to double check if your query is correct before executing it.
-    Always use this tool before executing a query with sql_db_query!"""
-    from planner.llm import model
-
-    trigger_prompt = f"""{query}
-Double check the PostgreSQL query above for common mistakes, including:
-- Using NOT IN with NULL values
-- Using UNION when UNION ALL should have been used
-- Using BETWEEN for exclusive ranges
-- Data type mismatch in predicates
-- Properly quoting identifiers
-- Using the correct number of arguments for functions
-- Casting to the correct data type
-- Using the proper columns for joins
-- SQLite-specific syntax that should be Postgres (e.g. AUTOINCREMENT, sqlite_master)
-
-If there are any of the above mistakes, rewrite the query. If there are no mistakes, just reproduce the original query.
-
-Output the final SQL query only.
-
-SQL Query: """
-
-    response = model.invoke(trigger_prompt)
-    return response.text.strip()

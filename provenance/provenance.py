@@ -8,12 +8,11 @@ from sqlalchemy import inspect, text
 from sqlalchemy.engine import Engine
 
 from provenance.ddl import (
+    _EVENTS_TABLE__DDL,
     _MODELS_TABLE__DDL,
     _PROVENANCE_SCHEMA,
     _RUNS_TABLE__DDL,
-    _EVENTS_TABLE__DDL,
 )
-
 from provenance.utils import _truncate
 
 
@@ -93,19 +92,16 @@ class QueryLog:
             raise RuntimeError("QueryLog is not connected")
         with self.engine.begin() as conn:
             conn.execute(
-                text(
-                    """
+                text("""
                     INSERT INTO provenance.models (model_id, model_name)
                     VALUES (:model_id, :model_name)
                     ON CONFLICT (model_id) DO NOTHING
-                    """
-                ),
+                    """),
                 {"model_id": model_id, "model_name": model_name},
             )
 
             conn.execute(
-                text(
-                    """
+                text("""
                     INSERT INTO provenance.runs (session_id, run_id, model_id, start_ts, end_ts)
                     VALUES (
                         :session_id,
@@ -114,8 +110,7 @@ class QueryLog:
                         COALESCE(:start_ts, CURRENT_TIMESTAMP),
                         :end_ts
                     )
-                    """
-                ),
+                    """),
                 {
                     "session_id": session_id,
                     "run_id": run_id,
@@ -136,13 +131,11 @@ class QueryLog:
             raise RuntimeError("QueryLog is not connected")
         with self.engine.begin() as conn:
             conn.execute(
-                text(
-                    """
+                text("""
                     UPDATE provenance.runs
                     SET status = :status, end_ts = COALESCE(:end_ts, CURRENT_TIMESTAMP), error = :error
                     WHERE run_id = :run_id
-                    """
-                ),
+                    """),
                 {
                     "run_id": run_id,
                     "status": status.value,
@@ -162,12 +155,10 @@ class QueryLog:
             raise RuntimeError("QueryLog is not connected")
         with self.engine.begin() as conn:
             conn.execute(
-                text(
-                    """
+                text("""
                     INSERT INTO provenance.events (session_id, run_id, event_type, payload)
                     VALUES (:session_id, :run_id, :event_type, CAST(:payload AS jsonb))
-                    """
-                ),
+                    """),
                 {
                     "session_id": session_id,
                     "run_id": run_id,

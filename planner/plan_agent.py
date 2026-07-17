@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import pathlib
 import sys
 from datetime import UTC, datetime
 from typing import Any, cast
-from uuid import uuid4, uuid5, NAMESPACE_OID
+from uuid import NAMESPACE_OID, uuid4, uuid5
 
 from langgraph.graph import END, START, MessagesState, StateGraph
 
@@ -16,9 +17,9 @@ from planner.nodes import (
     generate_query,
     get_schema_node,
     list_tables,
+    model_name,
     run_query_node,
     should_continue,
-    model_name,
 )
 from planner.schemas import Claim, ClaimType, Evidence, PlanAgentOutput
 from provenance import EventType, QueryLog, RunStatus, fingerprint_rows
@@ -60,12 +61,12 @@ agent = builder.compile()
 
 
 if __name__ == "__main__":
-    # try:
-    #     pathlib.Path("graph.png").write_bytes(agent.get_graph().draw_mermaid_png())
-    #     print("Wrote graph.png")
-    # except Exception as e:
-    #     print(f"Skipped graph.png ({e})")
-    #     print(agent.get_graph().draw_mermaid())
+    try:
+        pathlib.Path("graph.png").write_bytes(agent.get_graph().draw_mermaid_png())
+        print("Wrote graph.png")
+    except Exception as e:
+        print(f"Skipped graph.png ({e})")
+        print(agent.get_graph().draw_mermaid())
 
     db = DB()
     query_log = QueryLog()
@@ -107,7 +108,7 @@ if __name__ == "__main__":
             else:
                 response = step["messages"][-1].content
 
-        response = cast(dict[str, Any], response)
+        response = cast("dict[str, Any]", response)
         for evidence in response.get("evidence") or []:
             evidence["result_fingerprint"] = fingerprint_rows(evidence["rows"])
 
