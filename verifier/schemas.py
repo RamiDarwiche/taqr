@@ -11,7 +11,7 @@ from planner.schemas import PlanAgentOutput
 class ClaimVerification(BaseModel):
     claim_id: uuid.UUID
     status: VerificationStatus
-    reason: str | None = None
+    failure_reason: str | None = None
     checks: list[str] = Field(default_factory=list)
 
 

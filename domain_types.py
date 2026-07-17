@@ -6,28 +6,29 @@ from enum import Enum
 
 
 class ClaimType(str, Enum):
-    RANKING_TOP_K = "ranking_top_k"
-    AGGREGATION = "aggregation"
-    COMPARISON = "comparison"
-    TREND = "trend"
-    EXISTENCE = "existence"
-    DISTRIBUTION = "distribution"
+    RANKING_TOP_K = "RANKING_TOP_K"
+    AGGREGATION = "AGGREGATION"
+    COMPARISON = "COMPARISON"
+    TREND = "TREND"
+    EXISTENCE = "EXISTENCE"
+    DISTRIBUTION = "DISTRIBUTION"
 
 
 class VerificationStatus(str, Enum):
-    VERIFIED = "fully_verified"
-    PARTIALLY_VERIFIED = "partially_verified"
-    NOT_VERIFIED = "not_verified"
-    FAILED = "failed"
+    VERIFIED = "VERIFIED"
+    PARTIALLY_VERIFIED = "PARTIALLY_VERIFIED"
+    NOT_VERIFIED = "NOT_VERIFIED"
+    FAILED = "FAILED"
 
 
 class RunStatus(str, Enum):
-    RUNNING = "running"
-    COMPLETED = "completed"
-    FAILED = "failed"
+    RUNNING = "RUNNING"
+    COMPLETED = "COMPLETED"
+    FAILED = "FAILED"
 
 
 class EventType(str, Enum):
-    QUERY = "query"
-    TOOL_CALL = "tool_call"
-    QUERY_RESPONSE = "query_response"
+    QUERY = "QUERY"
+    TOOL_CALL = "TOOL_CALL"
+    QUERY_PLAN = "QUERY_PLAN"
+    QUERY_VERIFICATION = "QUERY_VERIFICATION"

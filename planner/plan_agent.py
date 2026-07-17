@@ -65,8 +65,7 @@ class PlanAgent:
 
     # better error handling, more modularity?
     # testing will probably make these more necessary
-    def ask(self, question: str, session_id: str) -> PlanAgentOutput:
-        run_id = str(uuid4())
+    def ask(self, question: str, session_id: str, run_id: str) -> PlanAgentOutput:
         model_id = str(uuid5(NAMESPACE_OID, model_name))
         start_ts = datetime.now(UTC)
         logging_callback = ProvenanceToolCallback(self.query_log, run_id)
@@ -106,7 +105,7 @@ class PlanAgent:
             payload = QueryResponsePayload(query=question, response=response)
             self.query_log.log_event(
                 run_id,
-                EventType.QUERY_RESPONSE,
+                EventType.QUERY_PLAN,
                 payload.model_dump(mode="json"),
             )
         finally:

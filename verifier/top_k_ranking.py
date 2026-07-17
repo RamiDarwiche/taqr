@@ -19,7 +19,7 @@ def verify_top_k_ranking(
     if not k:
         logger.error("Top-k ranking claim has no k value")
         result.status = VerificationStatus.FAILED
-        result.reason = "top-k ranking claim has no k value"
+        result.failure_reason = "top-k ranking claim has no k value"
         return result
 
     evidence_by_id = {e.id: e for e in evidence}
@@ -28,7 +28,7 @@ def verify_top_k_ranking(
         if e is None or not e.sql:
             logger.error(f"Missing evidence {evidence_id} for claim")
             result.status = VerificationStatus.FAILED
-            result.reason = f"missing evidence {evidence_id}"
+            result.failure_reason = f"missing evidence {evidence_id}"
             return result
         with engine.connect() as conn:
             rows = [list(row) for row in conn.execute(text(e.sql)).fetchall()]
@@ -37,7 +37,7 @@ def verify_top_k_ranking(
             logger.error(f"Expected: {k}")
             logger.error(f"Actual: {len(rows)}")
             result.status = VerificationStatus.FAILED
-            result.reason = f"expected {k} rows, got {len(rows)}"
+            result.failure_reason = f"expected {k} rows, got {len(rows)}"
             return result
         result.checks.append("top_k_row_count")
         if rows[0][0] != claim.subject:
@@ -45,12 +45,12 @@ def verify_top_k_ranking(
             logger.error(f"Expected: {claim.subject}")
             logger.error(f"Actual: {rows[0][0]}")
             result.status = VerificationStatus.FAILED
-            result.reason = (
+            result.failure_reason = (
                 f"subject mismatch: expected {claim.subject!r}, got {rows[0][0]!r}"
             )
             return result
         result.checks.append("top_k_subject")
 
     result.status = VerificationStatus.VERIFIED
-    result.reason = None
+    result.failure_reason = None
     return result

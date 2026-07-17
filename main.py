@@ -54,9 +54,12 @@ plan_agent = PlanAgent(db, query_log)
 #         raise HTTPException(status_code=500, detail=str(e))
 
 question = "What is the most widely manufactured AI chip in the dataset?"
+run_id = str(uuid.uuid4())
 session_id = str(uuid.uuid4())
-plan = plan_agent.ask(question, session_id)
-verified = verifier.verify_response(plan, db.get_engine(), query=question)
+plan = plan_agent.ask(question, session_id, run_id)
+verified = verifier.verify_response(
+    plan, db.get_engine(), query_log, session_id, run_id, query=question
+)
 logger.info(verified.model_dump(mode="json"))
 
 query_log.close()
