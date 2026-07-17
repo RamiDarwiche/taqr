@@ -24,6 +24,7 @@ run_query_node = ToolNode([sql_db_query], name="run_query")
 SKIP_SCHEMA_TABLES = frozenset({"provenance"})
 MAX_SQL_ATTEMPTS = 5
 
+# Queries should be programatically enforce top_k rather than relying on the system prompt
 planner_system_prompt = (
     open("planner/PLANNER_COMPRESSED.md").read().replace("{top_k}", "5")
 )

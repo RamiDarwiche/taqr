@@ -92,16 +92,19 @@ class QueryLog:
             raise RuntimeError("QueryLog is not connected")
         with self.engine.begin() as conn:
             conn.execute(
-                text("""
+                text(
+                    """
                     INSERT INTO provenance.models (model_id, model_name)
                     VALUES (:model_id, :model_name)
                     ON CONFLICT (model_id) DO NOTHING
-                    """),
+                    """
+                ),
                 {"model_id": model_id, "model_name": model_name},
             )
 
             conn.execute(
-                text("""
+                text(
+                    """
                     INSERT INTO provenance.runs (session_id, run_id, model_id, start_ts, end_ts)
                     VALUES (
                         :session_id,
@@ -110,7 +113,8 @@ class QueryLog:
                         COALESCE(:start_ts, CURRENT_TIMESTAMP),
                         :end_ts
                     )
-                    """),
+                    """
+                ),
                 {
                     "session_id": session_id,
                     "run_id": run_id,
@@ -131,11 +135,13 @@ class QueryLog:
             raise RuntimeError("QueryLog is not connected")
         with self.engine.begin() as conn:
             conn.execute(
-                text("""
+                text(
+                    """
                     UPDATE provenance.runs
                     SET status = :status, end_ts = COALESCE(:end_ts, CURRENT_TIMESTAMP), error = :error
                     WHERE run_id = :run_id
-                    """),
+                    """
+                ),
                 {
                     "run_id": run_id,
                     "status": status.value,
@@ -146,7 +152,6 @@ class QueryLog:
 
     def log_event(
         self,
-        session_id: str,
         run_id: str,
         event_type: EventType,
         payload: dict[str, Any] | None = None,
@@ -155,12 +160,13 @@ class QueryLog:
             raise RuntimeError("QueryLog is not connected")
         with self.engine.begin() as conn:
             conn.execute(
-                text("""
-                    INSERT INTO provenance.events (session_id, run_id, event_type, payload)
-                    VALUES (:session_id, :run_id, :event_type, CAST(:payload AS jsonb))
-                    """),
+                text(
+                    """
+                    INSERT INTO provenance.events (run_id, event_type, payload)
+                    VALUES (:run_id, :event_type, CAST(:payload AS jsonb))
+                    """
+                ),
                 {
-                    "session_id": session_id,
                     "run_id": run_id,
                     "event_type": event_type.value,
                     "payload": json.dumps(payload or {}),
@@ -169,7 +175,6 @@ class QueryLog:
 
     def log_tool_call(
         self,
-        session_id: str,
         run_id: str,
         *,
         tool_name: str | None,
@@ -191,4 +196,4 @@ class QueryLog:
             payload["output"] = _truncate(output)
         if error is not None:
             payload["error"] = error
-        self.log_event(session_id, run_id, EventType.TOOL_CALL, payload)
+        self.log_event(run_id, EventType.TOOL_CALL, payload)

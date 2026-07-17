@@ -12,9 +12,8 @@ from provenance.provenance import QueryLog
 class ProvenanceToolCallback(BaseCallbackHandler):
     """Logs LangChain tool calls into the append-only provenance store."""
 
-    def __init__(self, query_log: QueryLog, session_id: str, run_id: str) -> None:
+    def __init__(self, query_log: QueryLog, run_id: str) -> None:
         self.query_log = query_log
-        self.session_id = session_id
         self.run_id = run_id
         self._started_at: dict[str, float] = {}
         self._tool_name: dict[str, str | None] = {}
@@ -44,7 +43,6 @@ class ProvenanceToolCallback(BaseCallbackHandler):
         key = str(run_id)
         duration_ms = self._duration_ms(key)
         self.query_log.log_tool_call(
-            self.session_id,
             self.run_id,
             tool_name=self._tool_name.pop(key, kwargs.get("name")),
             tool_call_id=key,
@@ -64,7 +62,6 @@ class ProvenanceToolCallback(BaseCallbackHandler):
         key = str(run_id)
         duration_ms = self._duration_ms(key)
         self.query_log.log_tool_call(
-            self.session_id,
             self.run_id,
             tool_name=self._tool_name.pop(key, kwargs.get("name")),
             tool_call_id=key,

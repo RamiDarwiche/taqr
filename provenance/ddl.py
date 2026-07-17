@@ -20,7 +20,6 @@ CREATE TABLE provenance.runs (
 _EVENTS_TABLE__DDL = """
 CREATE TABLE provenance.events (
     event_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    session_id uuid NOT NULL,
     run_id uuid NOT NULL REFERENCES provenance.runs(run_id),
     event_type VARCHAR(50) NOT NULL,
     ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,

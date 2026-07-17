@@ -69,7 +69,7 @@ class PlanAgent:
         run_id = str(uuid4())
         model_id = str(uuid5(NAMESPACE_OID, model_name))
         start_ts = datetime.now(UTC)
-        logging_callback = ProvenanceToolCallback(self.query_log, session_id, run_id)
+        logging_callback = ProvenanceToolCallback(self.query_log, run_id)
         self.query_log.log_run(
             session_id=session_id,
             run_id=run_id,
@@ -102,7 +102,6 @@ class PlanAgent:
                 evidence["result_fingerprint"] = fingerprint_rows(evidence["rows"])
 
             self.query_log.log_event(
-                session_id,
                 run_id,
                 EventType.QUERY_RESPONSE,
                 {
