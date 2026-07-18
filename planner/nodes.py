@@ -23,7 +23,9 @@ SKIP_SCHEMA_TABLES = frozenset({"provenance"})
 MAX_SQL_ATTEMPTS = 5
 
 # Queries should be programatically enforce top_k rather than relying on the system prompt
-planner_system_prompt = open("planner/PLANNER_NEW.md").read().replace("{top_k}", "5")
+planner_system_prompt = (
+    open("planner/system_prompts/PLANNER_NEW.md").read().replace("{top_k}", "5")
+)
 
 _QUERY_NUDGE = (
     "You must call sql_db_query now with a single PostgreSQL SELECT that answers "

@@ -58,7 +58,7 @@ def verify_top_k_ranking(
                 f"Subjects not found in replayed rows: {missing_subjects!r}"
             )
             return result
-        result.checks.append("top_k_subject_existence")
+        result.checks.append("top_k_subject")
 
     result.status = VerificationStatus.VERIFIED
     result.failure_reason = None
