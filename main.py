@@ -1,4 +1,5 @@
 from __future__ import annotations
+from domain_types import EventType
 
 import uuid
 from contextlib import asynccontextmanager
@@ -7,12 +8,12 @@ from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import inspect
 
+import verifier
 from db import DB
+from logger import logger
 from planner import PlanAgent
 from provenance.query_log import QueryLog
 from samples import download_datasets
-from logger import logger
-import verifier
 
 # is this proper fastapi?
 query_log = QueryLog()
@@ -59,6 +60,11 @@ session_id = str(uuid.uuid4())
 plan = plan_agent.ask(question, session_id, run_id)
 verified = verifier.verify_response(
     plan, db.get_engine(), query_log, session_id, run_id, query=question
+)
+query_log.log_event(
+    run_id,
+    EventType.QUERY_VERIFICATION,
+    verified.model_dump(mode="json", include={"status", "claim_results"}),
 )
 logger.info(verified.model_dump(mode="json"))
 

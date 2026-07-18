@@ -56,7 +56,9 @@ def make_sql_tools(engine: Engine) -> SqlTools:
         for table in table_names.split(","):
             table = table.strip()
             if table not in valid_tables:
-                results.append(f"Error: table_names {{{table!r}}} not found in database")
+                results.append(
+                    f"Error: table_names {{{table!r}}} not found in database"
+                )
                 continue
 
             results.append(_format_table_schema(engine, table))

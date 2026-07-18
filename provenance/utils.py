@@ -1,8 +1,9 @@
-from planner.schemas import Evidence
 import hashlib
 import json
 from decimal import Decimal
 from typing import Any
+
+from planner.schemas import Evidence
 
 
 def _truncate(value: Any, limit: int = 4000) -> Any:

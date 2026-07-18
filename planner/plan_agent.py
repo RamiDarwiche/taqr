@@ -1,5 +1,4 @@
 from __future__ import annotations
-from logger import logger
 
 import pathlib
 import sys
@@ -10,6 +9,8 @@ from uuid import NAMESPACE_OID, uuid4, uuid5
 from langgraph.graph import END, START, MessagesState, StateGraph
 
 from db import DB
+from domain_types import ClaimType, EventType, RunStatus
+from logger import logger
 from planner.callbacks import ProvenanceToolCallback
 from planner.nodes import emit_claims, make_planner_nodes, model_name, should_continue
 from planner.schemas import (
@@ -18,9 +19,7 @@ from planner.schemas import (
     PlanAgentOutput,
     QueryResponsePayload,
 )
-from domain_types import ClaimType, EventType, RunStatus
 from provenance import QueryLog, fingerprint_rows
-
 
 __all__ = [
     "Claim",
