@@ -88,7 +88,9 @@ def verify_response(
         ],
     )
 
-    # Verify general integrity of the response
+    # Verify general integrity of the response:
+    # There exists claims and evidence, and for each claim, there exists at least one
+    # referenced piece of evidence that exists.
     if not claims:
         logger.error("No claims were returned by the plan agent")
         verified.status = VerificationStatus.FAILED
@@ -98,13 +100,17 @@ def verify_response(
         logger.error("No evidence proposed by the plan agent")
         return _fail_all(
             verified,
-            reason="no evidence provided",
+            reason="No evidence provided",
             checks=[],
         )
 
+    verified = verify_evidence_refs(claims, evidence, verified)
+
     logger.info(f"Verifying {len(claims)} claims")
 
-    verified = verify_hashes(evidence, engine, verified)
+    verified = verify_hashes(
+        evidence, engine, verified
+    )  # TODO: more granualar hashing? i.e. fingerprint each row
     verified = verify_metrics(claims, evidence, verified)
 
     # Verify each claim, dispatch to specialized verifiers
@@ -119,7 +125,7 @@ def verify_response(
                 verify_top_k_ranking(claim, evidence, engine, result)
             case _:
                 result.status = VerificationStatus.NOT_VERIFIED
-                result.failure_reason = f"no verifier for claim_type={claim.claim_type}"
+                result.failure_reason = f"No verifier for claim_type={claim.claim_type}"
 
     verified.status = _gate_status(verified.claim_results)
     logger.info(f"Trust gate status: {verified.status}")
@@ -140,6 +146,7 @@ def _claim_results_for_evidence(
     return matched
 
 
+# enforce this rather than manual updating claimverification fields in specialized verifiers?
 def _update_claim_results(
     results: list[ClaimVerification],
     *,
@@ -155,6 +162,50 @@ def _update_claim_results(
             result.status = status
         if failure_reason is not None:
             result.failure_reason = failure_reason
+
+
+def verify_evidence_refs(
+    claims: list[Claim], evidence: list[Evidence], verified: VerifiedResponse
+) -> VerifiedResponse:
+    """Ensure each claim cites at least one evidence id that exists in ``evidence``.
+
+    Updates the matching ``claim_results`` entry (success appends ``evidence_refs``;
+    failure marks that claim FAILED with a reason).
+    """
+    evidence_ids = {e.id for e in evidence}
+    results_by_id = {r.claim_id: r for r in verified.claim_results}
+
+    for claim in claims:
+        result = results_by_id.get(claim.id)
+        if result is None or result.status == VerificationStatus.FAILED:
+            continue
+
+        if not claim.evidence_ids:
+            reason = f"claim {claim.id} has empty evidence_ids"
+            logger.error(reason)
+            _update_claim_results(
+                [result],
+                checks=["evidence_refs"],
+                status=VerificationStatus.FAILED,
+                failure_reason=reason,
+            )
+            continue
+
+        missing = [eid for eid in claim.evidence_ids if eid not in evidence_ids]
+        if missing:
+            reason = f"claim {claim.id} references unknown evidence ids: {missing}"
+            logger.error(reason)
+            _update_claim_results(
+                [result],
+                checks=["evidence_refs"],
+                status=VerificationStatus.FAILED,
+                failure_reason=reason,
+            )
+            continue
+
+        _update_claim_results([result], checks=["evidence_refs"])
+
+    return verified
 
 
 def verify_hashes(
@@ -182,7 +233,7 @@ def verify_hashes(
             continue
 
         if not e.result_fingerprint or not e.sql:
-            reason = f"evidence {e.id} has no result fingerprint or SQL"
+            reason = f"Evidence {e.id} has no result fingerprint or SQL"
             logger.error(reason)
             logger.error(e)
             _update_claim_results(
@@ -199,7 +250,7 @@ def verify_hashes(
 
         if len(rows) != e.row_count:
             reason = (
-                f"row count mismatch for evidence {e.id}: "
+                f"Row count mismatch for evidence {e.id}: "
                 f"expected {e.row_count}, got {len(rows)}"
             )
             logger.error(reason)
@@ -214,7 +265,7 @@ def verify_hashes(
         actual = fingerprint_rows(rows)
         if actual != e.result_fingerprint:
             reason = (
-                f"hash mismatch for evidence {e.id}: "
+                f"Hash mismatch for evidence {e.id}: "
                 f"expected {e.result_fingerprint}, got {actual}"
             )
             logger.error(reason)
@@ -263,12 +314,10 @@ def verify_metrics(
             continue
 
         referenced = [
-            evidence_by_id[eid]
-            for eid in claim.evidence_ids
-            if eid in evidence_by_id
+            evidence_by_id[eid] for eid in claim.evidence_ids if eid in evidence_by_id
         ]
         if not referenced:
-            reason = f"claim {claim.id} references no known evidence for metric check"
+            reason = f"Claim {claim.id} references no known evidence for metric check"
             logger.error(reason)
             _update_claim_results(
                 [result],
@@ -285,7 +334,7 @@ def verify_metrics(
             continue
 
         reason = (
-            f"metric {claim.metric!r} not found in SQL of evidence "
+            f"Metric {claim.metric!r} not found in SQL of evidence "
             f"{[e.id for e in referenced]} for claim {claim.id}"
         )
         logger.error(reason)

@@ -28,28 +28,37 @@ def verify_top_k_ranking(
         if e is None or not e.sql:
             logger.error(f"Missing evidence {evidence_id} for claim")
             result.status = VerificationStatus.FAILED
-            result.failure_reason = f"missing evidence {evidence_id}"
+            result.failure_reason = f"Missing evidence {evidence_id}"
             return result
         with engine.connect() as conn:
             rows = [list(row) for row in conn.execute(text(e.sql)).fetchall()]
+            logger.trace(f"SQL replay rows:\n{rows}")
         if len(rows) != k:
             logger.error(
                 f"Row count mismatch for evidence {e.id}\nExpected: {k}\nActual: {len(rows)}"
             )
             result.status = VerificationStatus.FAILED
-            result.failure_reason = f"expected {k} rows, got {len(rows)}"
+            result.failure_reason = f"Expected {k} rows, got {len(rows)}"
             return result
         result.checks.append("top_k_row_count")
-        if rows[0][0] != claim.subject:
+
+        subjects = claim.subject if isinstance(claim.subject, list) else [claim.subject]
+        missing_subjects = [
+            subject
+            for subject in subjects
+            if not any(subject == value for row in rows for value in row)
+        ]
+        if missing_subjects:
             logger.error(
-                f"Subject mismatch for evidence {e.id}\nExpected: {claim.subject}\nActual: {rows[0][0]}"
+                f"Subjects missing from evidence {e.id}\n"
+                f"Missing: {missing_subjects}\nRows: {rows}"
             )
             result.status = VerificationStatus.FAILED
             result.failure_reason = (
-                f"subject mismatch: expected {claim.subject!r}, got {rows[0][0]!r}"
+                f"Subjects not found in replayed rows: {missing_subjects!r}"
             )
             return result
-        result.checks.append("top_k_subject")
+        result.checks.append("top_k_subject_existence")
 
     result.status = VerificationStatus.VERIFIED
     result.failure_reason = None
