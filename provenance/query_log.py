@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import json
+from datetime import date, datetime
+from decimal import Decimal
 from typing import Any
+from uuid import UUID
 
 from sqlalchemy import inspect, text
 from sqlalchemy.engine import Engine
@@ -14,6 +17,14 @@ from provenance.ddl import (
     _RUNS_TABLE__DDL,
 )
 from provenance.utils import _truncate
+
+
+def _json_default(value: Any) -> str:
+    if isinstance(value, (date, datetime)):
+        return value.isoformat()
+    if isinstance(value, (UUID, Decimal)):
+        return str(value)
+    raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
 
 
 class QueryLog:
@@ -66,6 +77,83 @@ class QueryLog:
 
     def close(self) -> None:
         self.engine = None
+
+    def list_run_summaries(
+        self, *, limit: int = 50, offset: int = 0
+    ) -> list[dict[str, Any]]:
+        if self.engine is None:
+            raise RuntimeError("QueryLog is not connected")
+        with self.engine.connect() as conn:
+            rows = conn.execute(
+                text(
+                    """
+                    SELECT r.run_id, r.session_id, r.status, r.error,
+                           r.start_ts, r.end_ts, m.model_name,
+                           plan.payload ->> 'query' AS question,
+                           verification.payload ->> 'status' AS verification_status
+                    FROM provenance.runs AS r
+                    JOIN provenance.models AS m ON m.model_id = r.model_id
+                    LEFT JOIN LATERAL (
+                        SELECT payload
+                        FROM provenance.events
+                        WHERE run_id = r.run_id AND event_type = 'QUERY_PLAN'
+                        ORDER BY ts DESC
+                        LIMIT 1
+                    ) AS plan ON TRUE
+                    LEFT JOIN LATERAL (
+                        SELECT payload
+                        FROM provenance.events
+                        WHERE run_id = r.run_id
+                          AND event_type = 'QUERY_VERIFICATION'
+                        ORDER BY ts DESC
+                        LIMIT 1
+                    ) AS verification ON TRUE
+                    ORDER BY r.start_ts DESC
+                    LIMIT :limit OFFSET :offset
+                    """
+                ),
+                {"limit": limit, "offset": offset},
+            )
+            return [dict(row) for row in rows.mappings()]
+
+    def get_run_metadata(self, run_id: str) -> dict[str, Any] | None:
+        if self.engine is None:
+            raise RuntimeError("QueryLog is not connected")
+        with self.engine.connect() as conn:
+            row = (
+                conn.execute(
+                    text(
+                        """
+                        SELECT r.run_id, r.session_id, r.status, r.error,
+                               r.start_ts, r.end_ts, r.model_id, m.model_name
+                        FROM provenance.runs AS r
+                        JOIN provenance.models AS m ON m.model_id = r.model_id
+                        WHERE r.run_id = :run_id
+                        """
+                    ),
+                    {"run_id": run_id},
+                )
+                .mappings()
+                .first()
+            )
+            return dict(row) if row is not None else None
+
+    def get_run_events(self, run_id: str) -> list[dict[str, Any]]:
+        if self.engine is None:
+            raise RuntimeError("QueryLog is not connected")
+        with self.engine.connect() as conn:
+            rows = conn.execute(
+                text(
+                    """
+                    SELECT event_id, run_id, event_type, ts, payload
+                    FROM provenance.events
+                    WHERE run_id = :run_id
+                    ORDER BY ts, event_id
+                    """
+                ),
+                {"run_id": run_id},
+            )
+            return [dict(row) for row in rows.mappings()]
 
     def log_run(
         self,
@@ -157,7 +245,7 @@ class QueryLog:
                 {
                     "run_id": run_id,
                     "event_type": event_type.value,
-                    "payload": json.dumps(payload or {}),
+                    "payload": json.dumps(payload or {}, default=_json_default),
                 },
             )
 
