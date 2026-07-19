@@ -12,6 +12,7 @@ class ClaimVerification(BaseModel):
     claim_id: uuid.UUID
     status: VerificationStatus
     failure_reason: str | None = None
+    fragility_notes: list[str] = Field(default_factory=list)
     checks: list[str] = Field(default_factory=list)
 
 
