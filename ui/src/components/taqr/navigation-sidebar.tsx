@@ -1,9 +1,12 @@
 import {
   ClockCounterClockwiseIcon,
   DatabaseIcon,
+  SidebarSimpleIcon,
   SparkleIcon,
 } from "@phosphor-icons/react"
+import { motion } from "motion/react"
 
+import { ThemeToggle } from "./theme-toggle"
 import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { cn } from "@/lib/utils"
@@ -21,6 +24,7 @@ interface NavigationSidebarProps {
   onRunSelect: (id: string) => void
   onTableSelect: (table: TableReference) => void
   onNavigate?: () => void
+  onToggleSidebar?: () => void
 }
 
 export function NavigationSidebar({
@@ -33,6 +37,7 @@ export function NavigationSidebar({
   onRunSelect,
   onTableSelect,
   onNavigate,
+  onToggleSidebar,
 }: NavigationSidebarProps) {
   const groupedTables = tables.reduce<Record<string, TableReference[]>>(
     (groups, table) => {
@@ -43,18 +48,30 @@ export function NavigationSidebar({
   )
 
   return (
-    <aside className="flex h-full min-h-0 flex-col bg-sidebar">
-      <div className="flex h-16 items-center gap-2 border-b px-5">
-        <span className="flex size-7 items-center justify-center rounded-sm bg-foreground text-background">
-          <SparkleIcon weight="fill" />
-        </span>
-        <div className="min-w-0">
-          <p className="font-heading text-sm font-semibold tracking-tight">
-            TAQR
-          </p>
-          <p className="text-[0.625rem] tracking-[0.18em] text-muted-foreground uppercase">
-            Research interface
-          </p>
+    <motion.aside className="flex h-full min-h-0 flex-col bg-sidebar">
+      <div className="flex h-16 items-center justify-between gap-2 border-b px-5">
+        <div className="flex w-full items-center gap-2">
+          <div className="flex w-full items-center gap-2">
+            <span className="flex size-7 items-center justify-center rounded-sm bg-foreground text-background">
+              <SparkleIcon weight="fill" />
+            </span>
+            <div className="min-w-0">
+              <p className="font-heading text-sm font-semibold tracking-tight">
+                TAQR
+              </p>
+              <p className="text-caption tracking-[0.18em] text-muted-foreground uppercase">
+                Research interface
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            aria-label="Close sidebar"
+            className="cursor-pointer self-start text-foreground transition-colors hover:text-primary"
+            onClick={onToggleSidebar}
+          >
+            <SidebarSimpleIcon className="size-5" weight="fill" mirrored />
+          </button>
         </div>
       </div>
 
@@ -88,7 +105,7 @@ export function NavigationSidebar({
       <ScrollArea className="min-h-0 flex-1">
         {view === "runs" ? (
           <nav aria-label="Run history" className="flex flex-col">
-            <p className="px-5 pt-5 pb-2 text-[0.625rem] font-semibold tracking-[0.16em] text-muted-foreground uppercase">
+            <p className="px-5 pt-5 pb-2 text-caption font-semibold tracking-[0.16em] text-muted-foreground uppercase">
               Recent investigations
             </p>
             {runs.map((run) => (
@@ -107,7 +124,7 @@ export function NavigationSidebar({
                 <span className="truncate text-xs font-medium">
                   {run.question}
                 </span>
-                <span className="flex items-center justify-between gap-2 text-[0.625rem] text-muted-foreground">
+                <span className="flex items-center justify-between gap-2 text-caption text-muted-foreground">
                   <span className="capitalize">{run.status}</span>
                   <time>{formatDate(run.created_at)}</time>
                 </span>
@@ -125,7 +142,7 @@ export function NavigationSidebar({
               .sort(([a], [b]) => a.localeCompare(b))
               .map(([schema, schemaTables]) => (
                 <div key={schema}>
-                  <p className="px-5 pt-5 pb-2 text-[0.625rem] font-semibold tracking-[0.16em] text-muted-foreground uppercase">
+                  <p className="px-5 pt-5 pb-2 text-caption font-semibold tracking-[0.16em] text-muted-foreground uppercase">
                     {schema}
                   </p>
                   {schemaTables.map((table) => (
@@ -145,7 +162,7 @@ export function NavigationSidebar({
                     >
                       <span className="truncate">{table.name}</span>
                       {table.row_count !== undefined && (
-                        <span className="shrink-0 font-mono text-[0.625rem] text-muted-foreground">
+                        <span className="shrink-0 font-mono text-caption text-muted-foreground">
                           {table.row_count.toLocaleString()}
                         </span>
                       )}
@@ -157,10 +174,13 @@ export function NavigationSidebar({
         )}
       </ScrollArea>
 
-      <div className="border-t px-5 py-3 text-[0.625rem] text-muted-foreground">
-        Evidence-led answers · local workspace
+      <div className="flex flex-col gap-1 border-t px-5 py-3">
+        <ThemeToggle />
+        <p className="text-caption text-muted-foreground">
+          Evidence-led answers · local workspace
+        </p>
       </div>
-    </aside>
+    </motion.aside>
   )
 }
 

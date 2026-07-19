@@ -60,7 +60,7 @@ export function TableExplorer({
           <div>
             <div className="mb-2 flex items-center gap-2">
               <Badge variant="outline">{table.schema}</Badge>
-              <span className="text-[0.625rem] tracking-[0.16em] text-muted-foreground uppercase">
+              <span className="text-caption tracking-[0.16em] text-muted-foreground uppercase">
                 Data catalog
               </span>
             </div>
@@ -73,7 +73,7 @@ export function TableExplorer({
               </p>
             )}
           </div>
-          <p className="font-mono text-[0.625rem] text-muted-foreground">
+          <p className="font-mono text-caption text-muted-foreground">
             {page?.total !== undefined
               ? `${page.total.toLocaleString()} rows`
               : table.row_count !== undefined
@@ -101,7 +101,7 @@ export function TableExplorer({
             <Table className="border-collapse">
               <TableHeader className="sticky top-0 bg-background">
                 <TableRow>
-                  <TableHead className="w-12 border-r text-center font-mono text-[0.5625rem]">
+                  <TableHead className="w-12 border-r text-center font-mono text-stat">
                     #
                   </TableHead>
                   {page?.columns.map((column) => (
@@ -109,11 +109,11 @@ export function TableExplorer({
                       key={column.name}
                       className="min-w-40 border-r px-4 last:border-r-0"
                     >
-                      <span className="block text-[0.625rem] font-semibold tracking-[0.12em] text-foreground uppercase">
+                      <span className="block text-caption font-semibold tracking-[0.12em] text-foreground uppercase">
                         {column.name}
                       </span>
                       {column.type && (
-                        <span className="font-mono text-[0.5625rem] font-normal text-muted-foreground">
+                        <span className="font-mono text-stat font-normal text-muted-foreground">
                           {column.type}
                         </span>
                       )}
@@ -124,13 +124,13 @@ export function TableExplorer({
               <TableBody>
                 {page?.rows.map((row, rowIndex) => (
                   <TableRow key={rowIndex}>
-                    <TableCell className="border-r text-center font-mono text-[0.5625rem] text-muted-foreground">
+                    <TableCell className="border-r text-center font-mono text-stat text-muted-foreground">
                       {page.offset + rowIndex + 1}
                     </TableCell>
                     {page.columns.map((column) => (
                       <TableCell
                         key={column.name}
-                        className="max-w-80 border-r px-4 font-mono text-[0.625rem] last:border-r-0"
+                        className="max-w-80 border-r px-4 font-mono text-caption last:border-r-0"
                         title={formatCell(row[column.name])}
                       >
                         <span className="block max-w-80 truncate">
@@ -152,7 +152,7 @@ export function TableExplorer({
       )}
 
       <footer className="flex h-14 shrink-0 items-center justify-between gap-3 border-t px-5 md:px-8">
-        <p className="font-mono text-[0.625rem] text-muted-foreground">
+        <p className="font-mono text-caption text-muted-foreground">
           {page
             ? `${page.offset + 1}–${page.offset + page.rows.length}${page.total ? ` of ${page.total}` : ""}`
             : "—"}

@@ -32,6 +32,7 @@ export interface ClaimVerification {
   claim_id: string
   status: string
   failure_reason?: string | null
+  fragility_notes?: string[] | null
   checks: string[]
 }
 

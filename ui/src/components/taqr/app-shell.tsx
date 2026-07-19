@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react"
-import { ListIcon } from "@phosphor-icons/react"
+import { ListIcon, SidebarSimpleIcon } from "@phosphor-icons/react"
+import { AnimatePresence, motion } from "motion/react"
 
 import { NavigationSidebar } from "./navigation-sidebar"
 import type { WorkspaceView } from "./navigation-sidebar"
@@ -36,6 +37,7 @@ export function TaqrApp() {
   const [runError, setRunError] = useState<string>()
   const [tableError, setTableError] = useState<string>()
   const [mobileOpen, setMobileOpen] = useState(false)
+  const [sidebarOpen, setSidebarOpen] = useState(true)
   const [sessionId, setSessionId] = useState<string>()
 
   useEffect(() => {
@@ -142,12 +144,29 @@ export function TaqrApp() {
         setSelectedTable(table)
       }}
       onNavigate={() => setMobileOpen(false)}
+      onToggleSidebar={() => {
+        setSidebarOpen(false)
+        setMobileOpen(false)
+      }}
     />
   )
 
   return (
-    <div className="grid h-svh min-h-0 bg-background lg:grid-cols-[17rem_minmax(0,1fr)]">
-      <div className="hidden min-h-0 border-r lg:block">{sidebar}</div>
+    <div className="flex h-svh min-h-0 bg-background">
+      <AnimatePresence initial={false}>
+        {sidebarOpen && (
+          <motion.div
+            key="sidebar"
+            initial={{ width: 0 }}
+            animate={{ width: "17rem" }}
+            exit={{ width: 0 }}
+            transition={{ duration: 0.25, ease: [0.4, 0, 0.2, 1] }}
+            className="hidden min-h-0 overflow-hidden border-r lg:block"
+          >
+            <div className="h-full w-[17rem]">{sidebar}</div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       <Sheet open={mobileOpen} onOpenChange={setMobileOpen}>
         <SheetContent
@@ -163,7 +182,7 @@ export function TaqrApp() {
         </SheetContent>
       </Sheet>
 
-      <section className="grid min-h-0 min-w-0 grid-rows-[3rem_minmax(0,1fr)_auto] lg:grid-rows-[minmax(0,1fr)_auto]">
+      <section className="relative grid min-h-0 min-w-0 flex-1 grid-rows-[3rem_minmax(0,1fr)_auto] lg:grid-rows-[minmax(0,1fr)_auto]">
         <header className="flex items-center justify-between border-b px-4 lg:hidden">
           <Button
             variant="ghost"
@@ -176,6 +195,24 @@ export function TaqrApp() {
           <p className="font-heading text-sm font-semibold">TAQR</p>
           <span className="size-8" aria-hidden="true" />
         </header>
+
+        <AnimatePresence>
+          {!sidebarOpen && (
+            <motion.button
+              key="sidebar-open"
+              type="button"
+              aria-label="Open sidebar"
+              initial={{ opacity: 0, x: -8 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={{ opacity: 0, x: -8 }}
+              transition={{ duration: 0.2 }}
+              className="absolute top-5 left-4 z-10 hidden cursor-pointer text-foreground transition-colors hover:text-primary lg:block"
+              onClick={() => setSidebarOpen(true)}
+            >
+              <SidebarSimpleIcon className="size-5" weight="fill" mirrored />
+            </motion.button>
+          )}
+        </AnimatePresence>
 
         <div className="min-h-0 min-w-0">
           {view === "runs" ? (

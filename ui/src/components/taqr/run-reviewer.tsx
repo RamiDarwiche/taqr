@@ -1,6 +1,7 @@
 import type { ReactNode } from "react"
 import {
   CheckCircleIcon,
+  CircleIcon,
   CircleNotchIcon,
   CodeIcon,
   LinkSimpleIcon,
@@ -73,16 +74,16 @@ export function RunReviewer({ run, isLoading, error }: RunReviewerProps) {
             <Badge variant="outline" className="capitalize">
               Run {run.status}
             </Badge>
-            <span className="font-mono text-[0.625rem] text-muted-foreground">
+            <span className="font-mono text-caption text-muted-foreground">
               RUN {run.id.slice(0, 8).toUpperCase()}
             </span>
             {run.created_at && (
-              <time className="text-[0.625rem] text-muted-foreground">
+              <time className="text-caption text-muted-foreground">
                 {formatTimestamp(run.created_at)}
               </time>
             )}
           </div>
-          <h1 className="max-w-4xl font-heading text-3xl font-medium tracking-tight md:text-5xl md:leading-[1.05]">
+          <h1 className="max-w-4xl font-heading text-xl font-medium tracking-tight md:text-3xl md:leading-[1.05]">
             {run.question}
           </h1>
           {run.claims.length > 0 && (
@@ -99,7 +100,7 @@ export function RunReviewer({ run, isLoading, error }: RunReviewerProps) {
         <section aria-labelledby="review-heading">
           <div className="mb-5 flex items-end justify-between gap-4">
             <div>
-              <p className="text-[0.625rem] font-semibold tracking-[0.18em] text-muted-foreground uppercase">
+              <p className="text-caption font-semibold tracking-[0.18em] text-muted-foreground uppercase">
                 Review path
               </p>
               <h2
@@ -150,6 +151,17 @@ export function RunReviewer({ run, isLoading, error }: RunReviewerProps) {
   )
 }
 
+// TODO: add typing for status
+function VerificationTabIcon({ status }: { status: string }) {
+  if (status.toUpperCase() === "FAILED") {
+    return <XCircleIcon className="size-3.5 text-stat text-destructive" />
+  } else if (status.toUpperCase() === "NOT_VERIFIED") {
+    return <CircleIcon className="size-3.5 text-stat text-muted-foreground" />
+  } else {
+    return <CheckCircleIcon className="size-3.5 text-stat text-primary" />
+  }
+}
+
 function ClaimReview({
   claim,
   evidence,
@@ -172,15 +184,27 @@ function ClaimReview({
         <div className="min-w-0 flex-1">
           <p className="text-sm leading-6 font-medium">{claim.claim_text}</p>
           <Tabs defaultValue="claim" className="mt-4">
-            <TabsList variant="line" aria-label={`Review claim ${index + 1}`}>
+            <TabsList
+              variant="line"
+              className="text-primary"
+              aria-label={`Review claim ${index + 1}`}
+            >
               <TabsTrigger value="claim">Claim</TabsTrigger>
               <TabsTrigger value="evidence">
                 Evidence
-                <span className="font-mono text-[0.5625rem]">
+                <span className="font-mono text-stat">
                   {claim.evidence_ids.length}
                 </span>
               </TabsTrigger>
-              <TabsTrigger value="verification">Verification</TabsTrigger>
+              <TabsTrigger
+                value="verification"
+                className="flex items-center gap-1"
+              >
+                Verification
+                {verification?.status && (
+                  <VerificationTabIcon status={verification.status} />
+                )}
+              </TabsTrigger>
             </TabsList>
 
             <TabsContent value="claim" className="pt-3">
@@ -237,9 +261,21 @@ function ClaimReview({
                     </ul>
                   )}
                   {verification.failure_reason && (
-                    <p className="border-l-2 border-destructive pl-3 text-destructive">
-                      {verification.failure_reason}
+                    <p className="border-l-2 border-destructive pl-3 text-caption text-destructive">
+                      Failure reason: {verification.failure_reason}
                     </p>
+                  )}
+                  {verification.fragility_notes && (
+                    <ul className="flex flex-col gap-2 border-l-2 border-yellow-500 pl-3">
+                      {verification.fragility_notes.map((note, noteIndex) => (
+                        <li
+                          key={`${note}-${noteIndex}`}
+                          className="text-caption text-yellow-600/80"
+                        >
+                          Fragility note: {note}
+                        </li>
+                      ))}
+                    </ul>
                   )}
                 </div>
               ) : (
@@ -266,7 +302,7 @@ function ClaimField({
 }) {
   return (
     <div className={wide ? "sm:col-span-2" : undefined}>
-      <dt className="mb-1 text-[0.5625rem] font-semibold tracking-[0.14em] text-muted-foreground uppercase">
+      <dt className="mb-1 text-stat font-semibold tracking-[0.14em] text-muted-foreground uppercase">
         {label}
       </dt>
       <dd className="font-mono text-[0.6875rem] text-foreground">{value}</dd>
@@ -279,22 +315,19 @@ function EvidenceView({ evidence }: { evidence: Evidence }) {
     <div className="flex min-w-0 flex-col gap-3 border-l-2 border-primary/40 pl-3">
       <div className="flex flex-wrap items-center gap-2">
         <LinkSimpleIcon />
-        <span className="font-mono text-[0.625rem] font-medium">
+        <span className="font-mono text-caption font-medium">
           {evidence.id}
         </span>
         <Badge variant="outline">{evidence.row_count} rows</Badge>
       </div>
-      <pre className="overflow-x-auto bg-muted px-3 py-2 font-mono text-[0.625rem] leading-5 text-foreground">
+      <pre className="overflow-x-auto bg-muted px-3 py-2 font-mono text-caption leading-5 text-foreground">
         <code>{evidence.sql}</code>
       </pre>
       <Table>
         <TableHeader>
           <TableRow>
             {evidence.columns.map((column) => (
-              <TableHead
-                key={column}
-                className="h-8 font-mono text-[0.5625rem]"
-              >
+              <TableHead key={column} className="h-8 font-mono text-stat">
                 {column}
               </TableHead>
             ))}
@@ -306,7 +339,7 @@ function EvidenceView({ evidence }: { evidence: Evidence }) {
               {evidence.columns.map((column, columnIndex) => (
                 <TableCell
                   key={`${column}-${columnIndex}`}
-                  className="max-w-56 truncate font-mono text-[0.5625rem]"
+                  className="max-w-56 truncate font-mono text-stat"
                   title={formatValue(row[columnIndex])}
                 >
                   {formatValue(row[columnIndex])}
@@ -316,7 +349,7 @@ function EvidenceView({ evidence }: { evidence: Evidence }) {
           ))}
         </TableBody>
       </Table>
-      <p className="font-mono text-[0.5625rem] break-all text-muted-foreground">
+      <p className="font-mono text-stat break-all text-muted-foreground">
         Fingerprint: {evidence.result_fingerprint ?? "not available"}
       </p>
     </div>
@@ -327,7 +360,7 @@ function ToolTimeline({ calls }: { calls: ToolCall[] }) {
   return (
     <section className="mt-10" aria-labelledby="timeline-heading">
       <div className="mb-5">
-        <p className="text-[0.625rem] font-semibold tracking-[0.18em] text-muted-foreground uppercase">
+        <p className="text-caption font-semibold tracking-[0.18em] text-muted-foreground uppercase">
           Execution trace
         </p>
         <h2
@@ -348,7 +381,7 @@ function ToolTimeline({ calls }: { calls: ToolCall[] }) {
               <p className="font-mono text-xs font-medium">
                 {call.tool_name ?? "Unknown tool"}
               </p>
-              <p className="mt-1 font-mono text-[0.5625rem] text-muted-foreground">
+              <p className="mt-1 font-mono text-stat text-muted-foreground">
                 {call.tool_call_id}
               </p>
               <ToolPayload label="Parameters" value={call.parameters} />
@@ -360,11 +393,11 @@ function ToolTimeline({ calls }: { calls: ToolCall[] }) {
               )}
             </div>
             <div className="text-right">
-              <Badge variant="outline" className="capitalize">
+              <Badge variant="outline" className="uppercase">
                 {call.status}
               </Badge>
               {call.duration_ms !== null && (
-                <p className="mt-1 font-mono text-[0.5625rem] text-muted-foreground">
+                <p className="mt-1 font-mono text-stat text-muted-foreground">
                   {call.duration_ms} ms
                 </p>
               )}
@@ -384,10 +417,10 @@ function ToolTimeline({ calls }: { calls: ToolCall[] }) {
 function ToolPayload({ label, value }: { label: string; value: unknown }) {
   return (
     <details className="mt-2">
-      <summary className="cursor-pointer text-[0.625rem] font-medium text-muted-foreground">
+      <summary className="cursor-pointer text-caption font-medium text-muted-foreground hover:text-primary hover:underline">
         {label}
       </summary>
-      <pre className="mt-1 max-h-48 overflow-auto bg-muted p-2 font-mono text-[0.5625rem] leading-4">
+      <pre className="mt-1 max-h-48 overflow-auto bg-muted p-2 font-mono text-stat leading-4">
         {formatValue(value)}
       </pre>
     </details>
