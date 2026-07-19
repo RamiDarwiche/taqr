@@ -1,14 +1,49 @@
 from __future__ import annotations
+from abc import ABC, abstractmethod
+from collections.abc import Callable, Sequence
 
 from sqlalchemy import Engine, text
 
-from domain_types import ClaimType, EventType, VerificationStatus
+from domain_types import ClaimType, VerificationStatus
 from logger import logger
 from planner.schemas import Claim, Evidence, PlanAgentOutput
 from provenance import QueryLog
 from provenance.utils import fingerprint_rows
 from verifier.schemas import ClaimVerification, VerifiedResponse
-from verifier.top_k_ranking import verify_top_k_ranking
+
+VerifierCheck = Callable[
+    [VerifiedResponse, Engine, QueryLog, str, str],
+    VerifiedResponse,
+]
+
+
+class AbstractVerifier(ABC):
+    def __init__(
+        self,
+        response: VerifiedResponse,
+        engine: Engine,
+        query_log: QueryLog,
+        session_id: str,
+        run_id: str,
+    ) -> None:
+        self.response = response
+        self.engine = engine
+        self.query_log = query_log
+        self.session_id = session_id
+        self.run_id = run_id
+
+    @property
+    @abstractmethod
+    def checks(self) -> Sequence[VerifierCheck]:
+        """Checks to run, in order, for this verifier."""
+        raise NotImplementedError
+
+    def verify(self) -> VerifiedResponse:
+        for check in self.checks:
+            self.response = check(
+                self.response, self.engine, self.query_log, self.session_id, self.run_id
+            )
+        return self.response
 
 
 def _gate_status(claim_results: list[ClaimVerification]) -> VerificationStatus:
@@ -113,19 +148,34 @@ def verify_response(
     )  # TODO: more granualar hashing? i.e. fingerprint each row
     verified = verify_metrics(claims, evidence, verified)
 
-    # Verify each claim, dispatch to specialized verifiers
+    # Import specialized verifiers here so they can inherit AbstractVerifier
+    # without creating a module-level circular import.
+    from verifier.top_k_ranking import TopKRankingVerifier
+
+    verifier_types: tuple[tuple[ClaimType, type[AbstractVerifier]], ...] = (
+        (ClaimType.RANKING_TOP_K, TopKRankingVerifier),
+    )
+    supported_types = {claim_type for claim_type, _ in verifier_types}
+
     results_by_id = {r.claim_id: r for r in verified.claim_results}
     for claim in claims:
         result = results_by_id[claim.id]
         if result.status == VerificationStatus.FAILED:
             continue
         logger.info(f"Verifying claim {claim.id}: {claim.claim_text}")
-        match claim.claim_type:
-            case ClaimType.RANKING_TOP_K:
-                verify_top_k_ranking(claim, evidence, engine, result)
-            case _:
-                result.status = VerificationStatus.NOT_VERIFIED
-                result.failure_reason = f"No verifier for claim_type={claim.claim_type}"
+        if claim.claim_type not in supported_types:
+            result.status = VerificationStatus.NOT_VERIFIED
+            result.failure_reason = f"No verifier for claim_type={claim.claim_type}"
+
+    for claim_type, verifier_type in verifier_types:
+        if any(
+            claim.claim_type == claim_type
+            and results_by_id[claim.id].status != VerificationStatus.FAILED
+            for claim in claims
+        ):
+            verified = verifier_type(
+                verified, engine, query_log, session_id, run_id
+            ).verify()
 
     verified.status = _gate_status(verified.claim_results)
     logger.info(f"Trust gate status: {verified.status}")
