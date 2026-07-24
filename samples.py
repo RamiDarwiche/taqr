@@ -1,27 +1,14 @@
-import kagglehub
-from kagglehub import KaggleDatasetAdapter
-from sqlalchemy import inspect
+"""Dataset bootstrap for local development.
+
+The semiconductor Kaggle corpora have been replaced by the BIRD MiniDev
+PostgreSQL dump as the sole application dataset.
+"""
+
 from sqlalchemy.engine import Engine
+
+from benchmark.bird import ensure_bird_dataset
 
 
 def download_datasets(engine: Engine) -> None:
-    dataset_names: list[str] = [
-        "chip_companies_financials",
-        "fab_capacity",
-        "export_controls",
-        "chip_prices",
-        "ai_chip_market",
-    ]
-
-    inspector = inspect(engine)
-    existing = set(inspector.get_table_names())
-
-    for dataset_name in dataset_names:
-        if dataset_name in existing:
-            continue
-        dataframe = kagglehub.dataset_load(
-            KaggleDatasetAdapter.PANDAS,
-            "sergionefedov/global-semiconductor-industry-2010-2026",
-            f"{dataset_name}.csv",
-        )
-        dataframe.to_sql(dataset_name, engine, index=False, if_exists="replace")
+    """Ensure the BIRD MiniDev dataset is available (compatibility name)."""
+    ensure_bird_dataset(engine)

@@ -1,60 +1,24 @@
 from __future__ import annotations
-from domain_types import EventType
 
 import uuid
-from contextlib import asynccontextmanager
-
-from fastapi import FastAPI, Header, HTTPException
-from pydantic import BaseModel
-from sqlalchemy import inspect
 
 import verifier
+from benchmark.bird import random_question
 from db import DB
+from domain_types import EventType
 from logger import logger
 from planner import PlanAgent
 from provenance.query_log import QueryLog
 from samples import download_datasets
 
-# is this proper fastapi?
 query_log = QueryLog()
 db = DB()
+download_datasets(db.get_engine())
 query_log.connect(db.get_engine())
 plan_agent = PlanAgent(db, query_log)
 
-
-# @asynccontextmanager
-# async def lifespan(app: FastAPI):
-#     download_datasets(db.get_engine())
-#     query_log.connect(db.get_engine())
-#     yield
-#     query_log.close()
-#     db.disconnect()
-
-
-# app = FastAPI(lifespan=lifespan)
-
-
-# class Question(BaseModel):
-#     question: str
-
-
-# @app.get("/tables")
-# def show_tables():
-#     return inspect(DB().get_engine()).get_table_names()
-
-
-# @app.post("/ask")
-# def ask(
-#     question: Question,
-#     x_session_id: str | None = Header(default=None, alias="X-Session-Id"),
-# ):
-#     try:
-#         session_id = x_session_id or str(uuid.uuid4())
-#         return plan_agent.ask(question.question, session_id)
-#     except Exception as e:
-#         raise HTTPException(status_code=500, detail=str(e))
-
-question = "What is the most widely manufactured AI chip in the dataset?"
+sample = random_question()
+question = sample.question
 run_id = str(uuid.uuid4())
 session_id = str(uuid.uuid4())
 plan = plan_agent.ask(question, session_id, run_id)
@@ -64,9 +28,18 @@ verified = verifier.verify_response(
 query_log.log_event(
     run_id,
     EventType.QUERY_VERIFICATION,
-    verified.model_dump(mode="json", include={"status", "claim_results"}),
+    {
+        **verified.model_dump(mode="json", include={"status", "claim_results"}),
+        "benchmark": {
+            "question_id": sample.question_id,
+            "db_id": sample.db_id,
+            "difficulty": sample.difficulty,
+            "gold_sql": sample.gold_sql,
+        },
+    },
 )
 logger.info(verified.model_dump(mode="json"))
+logger.info(f"Gold SQL for #{sample.question_id}: {sample.gold_sql}")
 
 query_log.close()
 db.disconnect()

@@ -13,8 +13,15 @@ from fastapi import FastAPI, Header, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
-from sqlalchemy import inspect, text
+from sqlalchemy import Engine, inspect, text
 
+from benchmark.bird import (
+    BirdQuestion,
+    ensure_bird_dataset,
+    get_question,
+    get_question_by_text,
+    random_question,
+)
 from db import DB
 from domain_types import EventType
 from provenance.query_log import QueryLog
@@ -27,6 +34,7 @@ _IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_$]*$")
 class RunRequest(BaseModel):
     question: str = Field(min_length=1, max_length=10_000)
     session_id: UUID | None = None
+    question_id: int | None = Field(default=None, ge=1)
 
 
 def _json_safe(value: Any) -> Any:
@@ -53,7 +61,10 @@ def _event_view(event: dict[str, Any]) -> dict[str, Any]:
 
 
 def _normalize_run_detail(
-    metadata: dict[str, Any], events: list[dict[str, Any]]
+    metadata: dict[str, Any],
+    events: list[dict[str, Any]],
+    *,
+    engine: Engine | None = None,
 ) -> dict[str, Any]:
     plan_payload: dict[str, Any] = {}
     verification: dict[str, Any] | None = None
@@ -78,6 +89,31 @@ def _normalize_run_detail(
         }
         for event in tool_events
     ]
+
+    benchmark: dict[str, Any] | None = None
+    if isinstance(verification, dict):
+        raw_benchmark = verification.get("benchmark")
+        if isinstance(raw_benchmark, dict):
+            benchmark = dict(raw_benchmark)
+        # Keep verification payload focused on claim results for the UI.
+        verification = {
+            key: value
+            for key, value in verification.items()
+            if key != "benchmark"
+        }
+    if not benchmark:
+        benchmark = _resolve_benchmark(
+            question_id=plan_payload.get("question_id"),
+            question=plan_payload.get("query"),
+        )
+
+    gold_result = None
+    if benchmark is not None:
+        gold_result = benchmark.get("result")
+        if gold_result is None and engine is not None and benchmark.get("gold_sql"):
+            gold_result = _execute_gold_sql(engine, str(benchmark["gold_sql"]))
+            benchmark["result"] = gold_result
+
     return _json_safe(
         {
             **metadata,
@@ -85,6 +121,11 @@ def _normalize_run_detail(
             "created_at": metadata.get("start_ts"),
             "updated_at": metadata.get("end_ts"),
             "question": plan_payload.get("query"),
+            "question_id": (benchmark or {}).get("question_id"),
+            "db_id": (benchmark or {}).get("db_id"),
+            "difficulty": (benchmark or {}).get("difficulty"),
+            "gold_sql": (benchmark or {}).get("gold_sql"),
+            "gold_result": gold_result,
             "plan": plan or None,
             "claims": plan.get("claims", []),
             "evidence": plan.get("evidence", []),
@@ -93,6 +134,60 @@ def _normalize_run_detail(
             "tool_events": tool_events,
         }
     )
+
+
+def _benchmark_payload(item: BirdQuestion) -> dict[str, object]:
+    return {
+        "question_id": item.question_id,
+        "db_id": item.db_id,
+        "difficulty": item.difficulty,
+        "gold_sql": item.gold_sql,
+        "evidence": item.evidence,
+    }
+
+
+def _resolve_benchmark(
+    *,
+    question_id: int | None = None,
+    question: str | None = None,
+) -> dict[str, object] | None:
+    item: BirdQuestion | None = None
+    if question_id is not None:
+        item = get_question(question_id)
+    if item is None and question:
+        item = get_question_by_text(question)
+    return _benchmark_payload(item) if item else None
+
+
+def _execute_gold_sql(engine: Engine, sql: str) -> dict[str, Any]:
+    """Run a MiniDev gold query and return a UI-friendly result payload."""
+    statement = sql.strip().rstrip(";")
+    if not statement or not statement.lstrip().lower().startswith("select"):
+        return {
+            "columns": [],
+            "rows": [],
+            "row_count": 0,
+            "error": "Gold SQL must be a single SELECT statement",
+        }
+
+    try:
+        with engine.connect() as conn:
+            result = conn.execute(text(statement))
+            columns = list(result.keys())
+            rows = [list(row) for row in result.fetchall()]
+        return {
+            "columns": columns,
+            "rows": rows,
+            "row_count": len(rows),
+            "error": None,
+        }
+    except Exception as exc:
+        return {
+            "columns": [],
+            "rows": [],
+            "row_count": 0,
+            "error": str(exc),
+        }
 
 
 def _normalize_run_summary(summary: dict[str, Any]) -> dict[str, Any]:
@@ -125,8 +220,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     from planner.plan_agent import PlanAgent
 
     db = DB()
+    engine = db.get_engine()
+    ensure_bird_dataset(engine)
     query_log = QueryLog()
-    query_log.connect(db.get_engine())
+    query_log.connect(engine)
     app.state.db = db
     app.state.query_log = query_log
     app.state.plan_agent = PlanAgent(db, query_log)
@@ -161,6 +258,15 @@ def create_app(
         run_id = str(uuid4())
         query_log: QueryLog = request.app.state.query_log
         db: DB = request.app.state.db
+        benchmark = _resolve_benchmark(
+            question_id=body.question_id,
+            question=body.question,
+        )
+        if body.question_id is not None and benchmark is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Unknown benchmark question_id={body.question_id}",
+            )
 
         try:
             plan = request.app.state.plan_agent.ask(body.question, session_id, run_id)
@@ -172,12 +278,21 @@ def create_app(
                 run_id,
                 query=body.question,
             )
+            verification_payload = verified.model_dump(
+                mode="json", include={"status", "claim_results"}
+            )
+            if benchmark is not None:
+                gold_sql = str(benchmark.get("gold_sql") or "")
+                if gold_sql:
+                    benchmark = {
+                        **benchmark,
+                        "result": _execute_gold_sql(db.get_engine(), gold_sql),
+                    }
+                verification_payload["benchmark"] = benchmark
             query_log.log_event(
                 run_id,
                 EventType.QUERY_VERIFICATION,
-                verified.model_dump(
-                    mode="json", include={"status", "claim_results"}
-                ),
+                verification_payload,
             )
         except Exception as exc:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
@@ -187,7 +302,9 @@ def create_app(
             raise HTTPException(status_code=500, detail="Completed run was not persisted")
         return JSONResponse(
             content=_normalize_run_detail(
-                metadata, query_log.get_run_events(run_id)
+                metadata,
+                query_log.get_run_events(run_id),
+                engine=db.get_engine(),
             )
         )
 
@@ -212,9 +329,23 @@ def create_app(
             raise HTTPException(status_code=404, detail="Run not found")
         return JSONResponse(
             content=_normalize_run_detail(
-                metadata, query_log.get_run_events(str(run_id))
+                metadata,
+                query_log.get_run_events(str(run_id)),
+                engine=request.app.state.db.get_engine(),
             )
         )
+
+    @app.get("/api/benchmark/random")
+    def get_random_benchmark_question() -> JSONResponse:
+        item = random_question()
+        return JSONResponse(content=_json_safe(item.as_api_dict()))
+
+    @app.get("/api/benchmark/questions/{question_id}")
+    def get_benchmark_question(question_id: int) -> JSONResponse:
+        item = get_question(question_id)
+        if item is None:
+            raise HTTPException(status_code=404, detail="Question not found")
+        return JSONResponse(content=_json_safe(item.as_api_dict()))
 
     @app.get("/api/tables")
     def list_tables(request: Request) -> JSONResponse:

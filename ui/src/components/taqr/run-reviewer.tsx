@@ -26,6 +26,7 @@ import type {
   Claim,
   ClaimVerification,
   Evidence,
+  GoldResult,
   RunDetail,
   ToolCall,
 } from "@/lib/api"
@@ -51,7 +52,7 @@ export function RunReviewer({ run, isLoading, error }: RunReviewerProps) {
     return (
       <CenteredMessage
         title="Begin an investigation"
-        description="Ask a question below, or choose a previous run from the sidebar."
+        description="Load a random BIRD MiniDev question below, or choose a previous run from the sidebar."
         icon={<CircleNotchIcon />}
       />
     )
@@ -72,7 +73,7 @@ export function RunReviewer({ run, isLoading, error }: RunReviewerProps) {
           <div className="flex flex-wrap items-center gap-2">
             <VerificationBadge status={run.verification?.status ?? "PENDING"} />
             <Badge variant="outline" className="capitalize">
-              Run {run.status}
+              RUN {run.status}
             </Badge>
             <span className="font-mono text-caption text-muted-foreground">
               RUN {run.id.slice(0, 8).toUpperCase()}
@@ -86,6 +87,19 @@ export function RunReviewer({ run, isLoading, error }: RunReviewerProps) {
           <h1 className="max-w-4xl font-heading text-xl font-medium tracking-tight md:text-3xl md:leading-[1.05]">
             {run.question}
           </h1>
+          {(run.question_id || run.db_id || run.difficulty) && (
+            <div className="flex flex-wrap items-center gap-2 text-caption text-muted-foreground">
+              {run.question_id != null && (
+                <Badge variant="outline">#{run.question_id}</Badge>
+              )}
+              {run.db_id && <Badge variant="outline">{run.db_id}</Badge>}
+              {run.difficulty && (
+                <Badge variant="outline" className="capitalize">
+                  {run.difficulty}
+                </Badge>
+              )}
+            </div>
+          )}
           {run.claims.length > 0 && (
             <ol className="flex max-w-3xl list-decimal flex-col gap-2 pl-5 text-base leading-7 text-muted-foreground">
               {run.claims.map((claim) => (
@@ -96,6 +110,34 @@ export function RunReviewer({ run, isLoading, error }: RunReviewerProps) {
         </header>
 
         <Separator className="my-8 md:my-10" />
+
+        {run.gold_sql && (
+          <section aria-labelledby="gold-heading" className="mb-10">
+            <div className="mb-4 flex items-end justify-between gap-4">
+              <div>
+                <p className="text-caption font-semibold tracking-[0.18em] text-muted-foreground uppercase">
+                  Benchmark reference
+                </p>
+                <h2
+                  id="gold-heading"
+                  className="mt-1 font-heading text-xl font-medium"
+                >
+                  Gold standard SQL
+                </h2>
+              </div>
+              {run.gold_result && !run.gold_result.error && (
+                <Badge variant="outline">
+                  {run.gold_result.row_count}{" "}
+                  {run.gold_result.row_count === 1 ? "row" : "rows"}
+                </Badge>
+              )}
+            </div>
+            <pre className="overflow-x-auto border bg-muted px-4 py-3 font-mono text-caption leading-5 text-foreground">
+              <code>{run.gold_sql}</code>
+            </pre>
+            <GoldResultView result={run.gold_result} />
+          </section>
+        )}
 
         <section aria-labelledby="review-heading">
           <div className="mb-5 flex items-end justify-between gap-4">
@@ -262,7 +304,7 @@ function ClaimReview({
                   )}
                   {verification.failure_reason && (
                     <p className="border-l-2 border-destructive pl-3 text-caption text-destructive">
-                      Failure reason: {verification.failure_reason}
+                      Failure: {verification.failure_reason}
                     </p>
                   )}
                   {verification.fragility_notes && (
@@ -306,6 +348,74 @@ function ClaimField({
         {label}
       </dt>
       <dd className="font-mono text-[0.6875rem] text-foreground">{value}</dd>
+    </div>
+  )
+}
+
+function GoldResultView({ result }: { result?: GoldResult | null }) {
+  if (!result) {
+    return (
+      <p className="mt-3 text-sm text-muted-foreground">
+        Gold standard results were not available for this run.
+      </p>
+    )
+  }
+
+  if (result.error) {
+    return (
+      <p className="mt-3 border-l-2 border-destructive pl-3 text-sm text-destructive">
+        Failed to execute gold SQL: {result.error}
+      </p>
+    )
+  }
+
+  if (result.columns.length === 0) {
+    return (
+      <p className="mt-3 text-sm text-muted-foreground">
+        Gold SQL returned no columns.
+      </p>
+    )
+  }
+
+  return (
+    <div className="mt-3 overflow-x-auto border">
+      <Table>
+        <TableHeader>
+          <TableRow>
+            {result.columns.map((column) => (
+              <TableHead key={column} className="h-8 font-mono text-stat">
+                {column}
+              </TableHead>
+            ))}
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {result.rows.length === 0 ? (
+            <TableRow>
+              <TableCell
+                colSpan={result.columns.length}
+                className="h-12 text-center text-muted-foreground"
+              >
+                No rows returned
+              </TableCell>
+            </TableRow>
+          ) : (
+            result.rows.map((row, rowIndex) => (
+              <TableRow key={rowIndex}>
+                {result.columns.map((column, columnIndex) => (
+                  <TableCell
+                    key={`${column}-${columnIndex}`}
+                    className="max-w-56 truncate font-mono text-stat"
+                    title={formatValue(row[columnIndex])}
+                  >
+                    {formatValue(row[columnIndex])}
+                  </TableCell>
+                ))}
+              </TableRow>
+            ))
+          )}
+        </TableBody>
+      </Table>
     </div>
   )
 }
@@ -433,7 +543,7 @@ function VerificationBadge({ status }: { status: string }) {
       variant={status.toUpperCase() === "FAILED" ? "destructive" : "secondary"}
       className="uppercase"
     >
-      Verification: {status}
+      Verification: {status.replace("_", " ")}
     </Badge>
   )
 }

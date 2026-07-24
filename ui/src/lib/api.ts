@@ -53,6 +53,13 @@ export interface ToolCall {
   error?: string
 }
 
+export interface GoldResult {
+  columns: string[]
+  rows: unknown[][]
+  row_count: number
+  error?: string | null
+}
+
 export interface RunDetail extends RunSummary {
   claims: Claim[]
   evidence: Evidence[]
@@ -60,6 +67,20 @@ export interface RunDetail extends RunSummary {
   tool_calls: ToolCall[]
   error?: string
   session_id?: string
+  question_id?: number | null
+  db_id?: string | null
+  difficulty?: string | null
+  gold_sql?: string | null
+  gold_result?: GoldResult | null
+}
+
+export interface BenchmarkQuestion {
+  question_id: number
+  db_id: string
+  question: string
+  evidence: string
+  gold_sql: string
+  difficulty: string
 }
 
 export interface TableReference {
@@ -83,6 +104,7 @@ export interface TablePage {
 export interface CreateRunInput {
   question: string
   session_id?: string
+  question_id?: number
 }
 
 const API_ROOT = import.meta.env.TAQR_API_URL || "/api"
@@ -126,6 +148,16 @@ export const api = {
       method: "POST",
       body: JSON.stringify(input),
     })
+  },
+
+  getRandomBenchmarkQuestion() {
+    return request<BenchmarkQuestion>("/benchmark/random")
+  },
+
+  getBenchmarkQuestion(questionId: number) {
+    return request<BenchmarkQuestion>(
+      `/benchmark/questions/${encodeURIComponent(questionId)}`
+    )
   },
 
   async listRuns() {

@@ -46,21 +46,23 @@ def verify_top_k_ranking(
 def _check_top_k_row_count(
     k: int, rows: list[list[Any]], evidence: Evidence, claim_result: ClaimVerification
 ) -> ClaimVerification:
-    if len(rows) > k:
+    actual = len(rows)
+    if actual < k:
+        logger.error(
+            f"Row count mismatch for evidence {evidence.id}\nExpected: {k}\nActual: {actual}"
+        )
+        claim_result.status = VerificationStatus.FAILED
+        claim_result.failure_reason = f"Expected {k} rows, got {actual}"
+        claim_result.checks.append("top_k_row_count")
+        return claim_result
+    if actual > k:
         logger.debug(
-            f"Row count mismatch for evidence {evidence.id}\nExpected: {k}\nActual: {len(rows)}"
+            f"Row count mismatch for evidence {evidence.id}\nExpected: {k}\nActual: {actual}"
         )
         claim_result.status = VerificationStatus.PARTIALLY_VERIFIED
         claim_result.fragility_notes.append(
-            f"top_k_row_count expected {k} rows, got {len(rows)}"
+            f"top_k_row_count expected {k} rows, got {actual}"
         )
-    else:
-        logger.error(
-            f"Row count mismatch for evidence {evidence.id}\nExpected: {k}\nActual: {len(rows)}"
-        )
-        claim_result.status = VerificationStatus.FAILED
-        claim_result.failure_reason = f"Expected {k} rows, got {len(rows)}"
-        return claim_result
     claim_result.checks.append("top_k_row_count")
     return claim_result
 
@@ -85,6 +87,7 @@ def _check_top_k_subjects(
         claim_result.failure_reason = (
             f"Subjects not found in replayed rows: {missing_subjects!r}"
         )
-        claim_result.checks.append("top_k_subjects")
+        claim_result.checks.append("top_k_subject")
         return claim_result
+    claim_result.checks.append("top_k_subject")
     return claim_result

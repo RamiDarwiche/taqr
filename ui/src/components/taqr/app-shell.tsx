@@ -5,6 +5,7 @@ import { AnimatePresence, motion } from "motion/react"
 import { NavigationSidebar } from "./navigation-sidebar"
 import type { WorkspaceView } from "./navigation-sidebar"
 import { QueryComposer } from "./query-composer"
+import type { SubmitQuestionInput } from "./query-composer"
 import { RunReviewer } from "./run-reviewer"
 import { TableExplorer } from "./table-explorer"
 import { Button } from "@/components/ui/button"
@@ -105,13 +106,14 @@ export function TaqrApp() {
     void loadTable(selectedTable, 0)
   }, [selectedTable, loadTable])
 
-  async function submitQuestion(question: string) {
+  async function submitQuestion(input: SubmitQuestionInput) {
     setSubmitting(true)
     setView("runs")
     setRunError(undefined)
     try {
       const created = await api.createRun({
-        question,
+        question: input.question,
+        question_id: input.question_id,
         session_id: sessionId ?? getOrCreateSessionId(),
       })
       setRun(created)
