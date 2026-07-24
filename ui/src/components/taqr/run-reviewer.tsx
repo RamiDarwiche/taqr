@@ -648,7 +648,7 @@ function formatValue(value: unknown): string {
 }
 
 function formatTimestamp(value: string) {
-  const date = new Date(value)
+  const date = new Date(value + "Z")
   if (Number.isNaN(date.getTime())) return value
   return new Intl.DateTimeFormat(undefined, {
     dateStyle: "medium",

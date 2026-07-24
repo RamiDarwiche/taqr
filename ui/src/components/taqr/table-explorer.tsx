@@ -134,7 +134,7 @@ export function TableExplorer({
                         title={formatCell(row[column.name])}
                       >
                         <span className="block max-w-80 truncate">
-                          {formatCell(row[column.name])}
+                          {formatCell(row[column.name], column.type)}
                         </span>
                       </TableCell>
                     ))}
@@ -190,7 +190,7 @@ export function TableExplorer({
   )
 }
 
-function formatCell(value: unknown): string {
+function formatCell(value: unknown, type: string): string {
   if (value === null) return "NULL"
   if (value === undefined) return "—"
   if (typeof value === "object") {
@@ -199,6 +199,11 @@ function formatCell(value: unknown): string {
     } catch {
       return "[object]"
     }
+  }
+
+  // Presuming all timestamps are in UTC for now
+  if (type?.toLowerCase() === "timestamp") { 
+    return new Date(String(value) + "Z").toLocaleString()
   }
   return String(value)
 }
