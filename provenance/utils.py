@@ -3,6 +3,10 @@ import json
 from decimal import Decimal, InvalidOperation
 from typing import TYPE_CHECKING, Any
 
+from sqlalchemy import Engine, text
+
+from logger import logger
+
 if TYPE_CHECKING:
     from planner.schemas import Evidence
 
@@ -77,3 +81,34 @@ def fingerprint_rows(evidence: "Evidence | list[list[Any]]") -> str:
         sort_keys=True,
     )
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def attach_result_fingerprints(
+    engine: Engine, evidence_list: list["Evidence"]
+) -> None:
+    """Set fingerprints (and authoritative rows) from SQL replay, not LLM copies.
+
+    AVG/NUMERIC results are ``Decimal`` in Postgres. The planner often pastes
+    truncated floats into ``evidence.rows``, which will not hash-match a verifier
+    replay. Physical provenance must hash the same channel verify uses: execute
+    ``evidence.sql`` and fingerprint those rows.
+    """
+    for evidence in evidence_list:
+        if not evidence.sql:
+            logger.error(f"Evidence {evidence.id} has no SQL; skipping fingerprint")
+            continue
+        try:
+            with engine.connect() as conn:
+                rows = [
+                    list(row) for row in conn.execute(text(evidence.sql)).fetchall()
+                ]
+        except Exception as exc:
+            logger.error(
+                f"Failed to replay evidence {evidence.id} for fingerprint: {exc}"
+            )
+            evidence.result_fingerprint = None
+            continue
+
+        evidence.rows = _canonicalize_value(rows)
+        evidence.row_count = len(rows)
+        evidence.result_fingerprint = fingerprint_rows(rows)

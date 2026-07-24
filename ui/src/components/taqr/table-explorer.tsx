@@ -131,10 +131,10 @@ export function TableExplorer({
                       <TableCell
                         key={column.name}
                         className="max-w-80 border-r px-4 font-mono text-caption last:border-r-0"
-                        title={formatCell(row[column.name])}
+                        title={formatCell(row[column.name], column.type ?? "")}
                       >
                         <span className="block max-w-80 truncate">
-                          {formatCell(row[column.name], column.type)}
+                          {formatCell(row[column.name], column.type ?? "")}
                         </span>
                       </TableCell>
                     ))}

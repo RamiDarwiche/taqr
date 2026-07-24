@@ -336,7 +336,7 @@ function ClaimReview({
                     </ul>
                   )}
                   {verification.failure_reason && (
-                    <p className="border-l-2 border-destructive pl-3 text-caption text-destructive">
+                    <p className="border-l-2 border-destructive pl-3 text-caption text-destructive break-words">
                       Failure: {verification.failure_reason}
                     </p>
                   )}
@@ -596,7 +596,7 @@ function VerificationBadge({ status }: { status: string }) {
   return (
     <Badge
       variant={status.toUpperCase() === "FAILED" ? "destructive" : "secondary"}
-      className={`uppercase ${status.toUpperCase() === "FAILED" ? "bg-destructive text-white" : "bg-primary text-white"}`}
+      className={`uppercase ${status.toUpperCase() === "FAILED" ? "bg-destructive dark:bg-destructive text-white" : "bg-primary dark:bg-primary/80 text-white"}`}
     >
       Verification: {status.replace("_", " ")}
     </Badge>

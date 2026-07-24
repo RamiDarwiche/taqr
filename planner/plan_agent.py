@@ -20,7 +20,7 @@ from planner.schemas import (
     PlanAgentOutput,
     QueryResponsePayload,
 )
-from provenance import QueryLog, fingerprint_rows
+from provenance import QueryLog, attach_result_fingerprints
 
 ProgressCallback = Callable[[dict[str, Any]], None]
 
@@ -147,8 +147,8 @@ class PlanAgent:
             if response is None:
                 raise ValueError("Plan agent finished without emitting claims/evidence")
 
-            for evidence in response.evidence:
-                evidence.result_fingerprint = fingerprint_rows(evidence)
+            # Fingerprint SQL replay (same channel as verify_hashes), not LLM-copied rows.
+            attach_result_fingerprints(self.db.get_engine(), response.evidence)
 
             payload = QueryResponsePayload(query=question, response=response)
             self.query_log.log_event(
