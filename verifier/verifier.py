@@ -1,14 +1,38 @@
+"""Orchestrator: shared integrity checks + dispatch to claim-type verifiers.
+
+To add a verifier for a new ``ClaimType``:
+
+1. Create ``verifier/<name>.py`` with
+   ``verify(claim, evidence, engine, result) -> ClaimVerification``.
+2. Use helpers from ``verifier.base`` (``fail``, ``mark_fragile``,
+   ``pass_check``, ``finalize_claim``, ``is_failed``) for all status updates.
+3. Register the function in ``CLAIM_VERIFIERS`` below.
+"""
+
 from __future__ import annotations
+
+from collections.abc import Callable
 
 from sqlalchemy import Engine, text
 
-from domain_types import ClaimType, EventType, VerificationStatus
+from domain_types import ClaimType, VerificationStatus
 from logger import logger
 from planner.schemas import Claim, Evidence, PlanAgentOutput
 from provenance import QueryLog
 from provenance.utils import fingerprint_rows
+from verifier import top_k_ranking
+from verifier.base import fail, is_failed, pass_check
 from verifier.schemas import ClaimVerification, VerifiedResponse
-from verifier.top_k_ranking import verify_top_k_ranking
+
+ClaimVerifier = Callable[
+    [Claim, list[Evidence], Engine, ClaimVerification],
+    ClaimVerification,
+]
+
+# Claim-type → specialized verifier. Shared integrity runs first in verify_response.
+CLAIM_VERIFIERS: dict[ClaimType, ClaimVerifier] = {
+    ClaimType.RANKING_TOP_K: top_k_ranking.verify,
+}
 
 
 def _gate_status(claim_results: list[ClaimVerification]) -> VerificationStatus:
@@ -32,19 +56,10 @@ def _fail_all(
     reason: str,
     checks: list[str],
 ) -> VerifiedResponse:
-    """Following checks that compromise the integrity of all claims, fails all claim verifications
-
-    :param verified: The verified response object to fail
-    :type verified: VerifiedResponse
-    :param reason: The reason for failing the claims
-    :type reason: str
-    :param checks: The checks that caused the failure
-    :type checks: list[str]
-    :return: The verified response object with all claims failed
-    :rtype: VerifiedResponse
-    """
+    """Fail every claim (integrity failure that compromises the whole response)."""
     for result in verified.claim_results:
-        result.checks.extend(checks)
+        for check in checks:
+            pass_check(result, check)
         result.status = VerificationStatus.FAILED
         result.failure_reason = reason
     verified.status = VerificationStatus.FAILED
@@ -60,18 +75,7 @@ def verify_response(
     *,
     query: str | None = None,
 ) -> VerifiedResponse:
-    """Entry point for verifying a plan agent's response. Verification includes several checks on the integrity and consistency of all claims and evidence.
-    Further verification is dispatched to specialized verifiers for each claim type, focusing on correctness.
-
-    :param response: The plan agent's response to verify
-    :type response: PlanAgentOutput
-    :param engine: The database engine to use for executing SQL queries
-    :type engine: Engine
-    :param query: The query that produced the response
-    :type query: str
-    :return: The verified response object
-    :rtype: VerifiedResponse
-    """
+    """Entry point: shared integrity checks, then per-claim type dispatch."""
     claims = response.claims
     evidence = response.evidence
 
@@ -88,9 +92,6 @@ def verify_response(
         ],
     )
 
-    # Verify general integrity of the response:
-    # There exists claims and evidence, and for each claim, there exists at least one
-    # referenced piece of evidence that exists.
     if not claims:
         logger.error("No claims were returned by the plan agent")
         verified.status = VerificationStatus.FAILED
@@ -113,19 +114,18 @@ def verify_response(
     )  # TODO: more granualar hashing? i.e. fingerprint each row
     verified = verify_metrics(claims, evidence, verified)
 
-    # Verify each claim, dispatch to specialized verifiers
     results_by_id = {r.claim_id: r for r in verified.claim_results}
     for claim in claims:
         result = results_by_id[claim.id]
-        if result.status == VerificationStatus.FAILED:
+        if is_failed(result):
             continue
         logger.info(f"Verifying claim {claim.id}: {claim.claim_text}")
-        match claim.claim_type:
-            case ClaimType.RANKING_TOP_K:
-                verify_top_k_ranking(claim, evidence, engine, result)
-            case _:
-                result.status = VerificationStatus.NOT_VERIFIED
-                result.failure_reason = f"No verifier for claim_type={claim.claim_type}"
+        verifier_fn = CLAIM_VERIFIERS.get(claim.claim_type)
+        if verifier_fn is None:
+            result.status = VerificationStatus.NOT_VERIFIED
+            result.failure_reason = f"No verifier for claim_type={claim.claim_type}"
+            continue
+        verifier_fn(claim, evidence, engine, result)
 
     verified.status = _gate_status(verified.claim_results)
     logger.info(f"Trust gate status: {verified.status}")
@@ -146,64 +146,38 @@ def _claim_results_for_evidence(
     return matched
 
 
-# enforce this rather than manual updating claimverification fields in specialized verifiers?
-def _update_claim_results(
-    results: list[ClaimVerification],
-    *,
-    checks: list[str],
-    status: VerificationStatus | None = None,
-    failure_reason: str | None = None,
-) -> None:
-    for result in results:
-        for check in checks:
-            if check not in result.checks:
-                result.checks.append(check)
-        if status is not None:
-            result.status = status
-        if failure_reason is not None:
-            result.failure_reason = failure_reason
-
-
 def verify_evidence_refs(
     claims: list[Claim], evidence: list[Evidence], verified: VerifiedResponse
 ) -> VerifiedResponse:
-    """Ensure each claim cites at least one evidence id that exists in ``evidence``.
-
-    Updates the matching ``claim_results`` entry (success appends ``evidence_refs``;
-    failure marks that claim FAILED with a reason).
-    """
+    """Ensure each claim cites at least one evidence id that exists in ``evidence``."""
     evidence_ids = {e.id for e in evidence}
     results_by_id = {r.claim_id: r for r in verified.claim_results}
 
     for claim in claims:
         result = results_by_id.get(claim.id)
-        if result is None or result.status == VerificationStatus.FAILED:
+        if result is None or is_failed(result):
             continue
 
         if not claim.evidence_ids:
-            reason = f"claim {claim.id} has empty evidence_ids"
-            logger.error(reason)
-            _update_claim_results(
-                [result],
-                checks=["evidence_refs"],
-                status=VerificationStatus.FAILED,
-                failure_reason=reason,
+            fail(
+                result,
+                check="evidence_refs",
+                reason=f"claim {claim.id} has empty evidence_ids",
             )
             continue
 
         missing = [eid for eid in claim.evidence_ids if eid not in evidence_ids]
         if missing:
-            reason = f"claim {claim.id} references unknown evidence ids: {missing}"
-            logger.error(reason)
-            _update_claim_results(
-                [result],
-                checks=["evidence_refs"],
-                status=VerificationStatus.FAILED,
-                failure_reason=reason,
+            fail(
+                result,
+                check="evidence_refs",
+                reason=(
+                    f"claim {claim.id} references unknown evidence ids: {missing}"
+                ),
             )
             continue
 
-        _update_claim_results([result], checks=["evidence_refs"])
+        pass_check(result, "evidence_refs")
 
     return verified
 
@@ -211,21 +185,7 @@ def verify_evidence_refs(
 def verify_hashes(
     evidence: list[Evidence], engine: Engine, verified: VerifiedResponse
 ) -> VerifiedResponse:
-    """Rerun each evidence SQL and compare row fingerprints to the stored hash.
-
-    For every evidence item, updates ``verified.claim_results`` for claims that
-    reference that evidence via ``evidence_ids`` (success appends checks;
-    failure marks those claims FAILED with a reason).
-
-    :param evidence: The evidence items to verify
-    :type evidence: list[Evidence]
-    :param engine: The database engine to use for executing SQL queries
-    :type engine: Engine
-    :param verified: Accumulator for per-claim verification state
-    :type verified: VerifiedResponse
-    :return: The same verified response, mutated in place
-    :rtype: VerifiedResponse
-    """
+    """Rerun each evidence SQL and compare row fingerprints to the stored hash."""
     for e in evidence:
         referencing = _claim_results_for_evidence(verified, e.id)
         if not referencing:
@@ -236,17 +196,13 @@ def verify_hashes(
             reason = f"Evidence {e.id} has no result fingerprint or SQL"
             logger.error(reason)
             logger.error(e)
-            _update_claim_results(
-                referencing,
-                checks=["hash", "row_count"],
-                status=VerificationStatus.FAILED,
-                failure_reason=reason,
-            )
+            for result in referencing:
+                fail(result, check="hash", reason=reason)
+                pass_check(result, "row_count")
             continue
 
         with engine.connect() as conn:
-            result = conn.execute(text(e.sql))
-            rows = [list(row) for row in result.fetchall()]
+            rows = [list(row) for row in conn.execute(text(e.sql)).fetchall()]
 
         if len(rows) != e.row_count:
             reason = (
@@ -254,12 +210,9 @@ def verify_hashes(
                 f"expected {e.row_count}, got {len(rows)}"
             )
             logger.error(reason)
-            _update_claim_results(
-                referencing,
-                checks=["hash", "row_count"],
-                status=VerificationStatus.FAILED,
-                failure_reason=reason,
-            )
+            for result in referencing:
+                fail(result, check="hash", reason=reason)
+                pass_check(result, "row_count")
             continue
 
         actual = fingerprint_rows(rows)
@@ -269,16 +222,15 @@ def verify_hashes(
                 f"expected {e.result_fingerprint}, got {actual}"
             )
             logger.error(reason)
-            _update_claim_results(
-                referencing,
-                checks=["hash", "row_count"],
-                status=VerificationStatus.FAILED,
-                failure_reason=reason,
-            )
+            for result in referencing:
+                fail(result, check="hash", reason=reason)
+                pass_check(result, "row_count")
             continue
 
         logger.info(f"Hash verified for evidence {e.id}")
-        _update_claim_results(referencing, checks=["hash", "row_count"])
+        for result in referencing:
+            pass_check(result, "hash")
+            pass_check(result, "row_count")
 
     return verified
 
@@ -286,63 +238,44 @@ def verify_hashes(
 def verify_metrics(
     claims: list[Claim], evidence: list[Evidence], verified: VerifiedResponse
 ) -> VerifiedResponse:
-    """Verify each claim's metric appears in at least one referenced evidence SQL.
-
-    Updates ``verified.claim_results`` for the claim under test (success appends
-    the ``metric`` check; failure marks that claim FAILED with a reason).
-    Claims already FAILED (e.g. from hash verification) are skipped.
-
-    :param claims: The claims to verify
-    :type claims: list[Claim]
-    :param evidence: The evidence items to verify
-    :type evidence: list[Evidence]
-    :param verified: Accumulator for per-claim verification state
-    :type verified: VerifiedResponse
-    :return: The same verified response, mutated in place
-    :rtype: VerifiedResponse
-    """
+    """Verify each claim's metric appears in at least one referenced evidence SQL."""
     results_by_id = {r.claim_id: r for r in verified.claim_results}
     evidence_by_id = {e.id: e for e in evidence}
 
     for claim in claims:
         result = results_by_id.get(claim.id)
-        if result is None or result.status == VerificationStatus.FAILED:
+        if result is None or is_failed(result):
             continue
 
         if not claim.metric:
-            # Metrics optional for now; nothing to check.
             continue
 
         referenced = [
             evidence_by_id[eid] for eid in claim.evidence_ids if eid in evidence_by_id
         ]
         if not referenced:
-            reason = f"Claim {claim.id} references no known evidence for metric check"
-            logger.error(reason)
-            _update_claim_results(
-                [result],
-                checks=["metric"],
-                status=VerificationStatus.FAILED,
-                failure_reason=reason,
+            fail(
+                result,
+                check="metric",
+                reason=(
+                    f"Claim {claim.id} references no known evidence for metric check"
+                ),
             )
             continue
 
         metric = claim.metric.lower()
         if any(metric in e.sql.lower() for e in referenced if e.sql):
             logger.info(f"Metric {claim.metric!r} verified for claim {claim.id}")
-            _update_claim_results([result], checks=["metric"])
+            pass_check(result, "metric")
             continue
 
-        reason = (
-            f"Metric {claim.metric!r} not found in SQL of evidence "
-            f"{[e.id for e in referenced]} for claim {claim.id}"
-        )
-        logger.error(reason)
-        _update_claim_results(
-            [result],
-            checks=["metric"],
-            status=VerificationStatus.FAILED,
-            failure_reason=reason,
+        fail(
+            result,
+            check="metric",
+            reason=(
+                f"Metric {claim.metric!r} not found in SQL of evidence "
+                f"{[e.id for e in referenced]} for claim {claim.id}"
+            ),
         )
 
     return verified

@@ -1,3 +1,9 @@
+"""Claim-type verifier for ``ClaimType.RANKING_TOP_K``.
+
+Registered in ``verifier.verifier.CLAIM_VERIFIERS``. Status updates go through
+``verifier.base`` only.
+"""
+
 from __future__ import annotations
 
 import re
@@ -5,9 +11,16 @@ from typing import Any, Literal
 
 from sqlalchemy import Engine, text
 
-from domain_types import VerificationStatus
 from logger import logger
 from planner.schemas import Claim, Evidence
+from verifier.base import (
+    fail,
+    finalize_claim,
+    is_failed,
+    mark_fragile,
+    pass_check,
+    run_checks,
+)
 from verifier.schemas import ClaimVerification
 
 _ORDER_BY_RE = re.compile(r"\border\s+by\b", re.IGNORECASE)
@@ -18,133 +31,70 @@ _ORDER_DIR_RE = re.compile(
 _LIMIT_RE = re.compile(r"\blimit\s+(\d+)\b", re.IGNORECASE)
 
 
-def verify_top_k_ranking(
+def verify(
     claim: Claim,
     evidence: list[Evidence],
     engine: Engine,
-    claim_result: ClaimVerification,
+    result: ClaimVerification,
 ) -> ClaimVerification:
-    """Mutate ``result`` in place with top-k checks; return the same object."""
+    """Run ranking-specific checks; mutate and return ``result``."""
     k = claim.k
     if not k:
-        logger.error("Top-k ranking claim has no k value")
-        claim_result.status = VerificationStatus.FAILED
-        claim_result.failure_reason = "top-k ranking claim has no k value"
-        return claim_result
+        return fail(
+            result,
+            check="top_k_k",
+            reason="top-k ranking claim has no k value",
+        )
 
     evidence_by_id = {e.id: e for e in evidence}
     for evidence_id in claim.evidence_ids:
         e = evidence_by_id.get(evidence_id)
         if e is None:
-            claim_result = _fail(
-                claim_result,
+            return fail(
+                result,
                 check="evidence_refs",
                 reason=f"claim references unknown evidence id: {evidence_id}",
             )
-            return claim_result
 
-        shape = _check_top_k_sql_shape(k, e, claim_result)
-        claim_result = shape.result
-        if claim_result.status == VerificationStatus.FAILED:
-            return claim_result
+        direction = _check_sql_shape(k, e, result)
+        if is_failed(result):
+            return result
 
         with engine.connect() as conn:
             rows = [list(row) for row in conn.execute(text(e.sql)).fetchall()]
             logger.trace(f"SQL replay rows:\n{rows}")
 
-            claim_result = _check_top_k_row_count(k, rows, e, claim_result)
-            if claim_result.status == VerificationStatus.FAILED:
-                return claim_result
-
             under_k = len(rows) < k
-
-            claim_result = _check_top_k_null_subjects(rows, e, claim_result)
-            if claim_result.status == VerificationStatus.FAILED:
-                return claim_result
-
-            claim_result = _check_top_k_subjects(
-                claim, rows, e, claim_result, under_k=under_k
-            )
-            if claim_result.status == VerificationStatus.FAILED:
-                return claim_result
-
             metric_idx = _metric_column_index(claim, e)
+
+            steps = [
+                lambda: _check_row_count(k, rows, e, result),
+                lambda: _check_null_subjects(rows, e, result),
+                lambda: _check_subjects(
+                    claim, rows, e, result, under_k=under_k
+                ),
+            ]
             if metric_idx is not None:
-                claim_result = _check_top_k_monotonic(
-                    rows, metric_idx, shape.direction, e, claim_result
+                idx = metric_idx
+                steps.extend(
+                    [
+                        lambda: _check_monotonic(
+                            rows, idx, direction, e, result
+                        ),
+                        lambda: _check_ties(rows, idx, e, result),
+                        lambda: _check_non_negative(rows, idx, e, result),
+                    ]
                 )
-                if claim_result.status == VerificationStatus.FAILED:
-                    return claim_result
+            steps.append(lambda: _check_filters(claim, e, result))
 
-                claim_result = _check_top_k_ties(
-                    rows, metric_idx, e, claim_result
-                )
-                if claim_result.status == VerificationStatus.FAILED:
-                    return claim_result
+            if is_failed(run_checks(result, *steps)):
+                return result
 
-                claim_result = _check_top_k_non_negative(
-                    rows, metric_idx, e, claim_result
-                )
-                if claim_result.status == VerificationStatus.FAILED:
-                    return claim_result
-
-            claim_result = _check_top_k_filters(claim, e, claim_result)
-            if claim_result.status == VerificationStatus.FAILED:
-                return claim_result
-
-    if claim_result.status != VerificationStatus.FAILED:
-        if claim_result.fragility_notes:
-            claim_result.status = VerificationStatus.PARTIALLY_VERIFIED
-        else:
-            claim_result.status = VerificationStatus.VERIFIED
-            claim_result.failure_reason = None
-    return claim_result
+    return finalize_claim(result)
 
 
-class _SqlShapeResult:
-    __slots__ = ("result", "direction")
-
-    def __init__(
-        self,
-        result: ClaimVerification,
-        direction: Literal["ASC", "DESC"] = "ASC",
-    ) -> None:
-        self.result = result
-        self.direction = direction
-
-
-def _fail(
-    claim_result: ClaimVerification,
-    *,
-    check: str,
-    reason: str,
-) -> ClaimVerification:
-    logger.error(reason)
-    claim_result.status = VerificationStatus.FAILED
-    claim_result.failure_reason = reason
-    if check not in claim_result.checks:
-        claim_result.checks.append(check)
-    return claim_result
-
-
-def _mark_fragile(
-    claim_result: ClaimVerification,
-    *,
-    check: str,
-    note: str,
-) -> ClaimVerification:
-    logger.debug(note)
-    if claim_result.status != VerificationStatus.FAILED:
-        claim_result.status = VerificationStatus.PARTIALLY_VERIFIED
-    claim_result.fragility_notes.append(note)
-    if check not in claim_result.checks:
-        claim_result.checks.append(check)
-    return claim_result
-
-
-def _append_check(claim_result: ClaimVerification, check: str) -> None:
-    if check not in claim_result.checks:
-        claim_result.checks.append(check)
+# Back-compat alias for callers/tests that used the old name.
+verify_top_k_ranking = verify
 
 
 def _order_direction(sql: str) -> Literal["ASC", "DESC"]:
@@ -154,99 +104,95 @@ def _order_direction(sql: str) -> Literal["ASC", "DESC"]:
     return "ASC"
 
 
-def _check_top_k_sql_shape(
-    k: int, evidence: Evidence, claim_result: ClaimVerification
-) -> _SqlShapeResult:
+def _check_sql_shape(
+    k: int, evidence: Evidence, result: ClaimVerification
+) -> Literal["ASC", "DESC"]:
     sql = evidence.sql or ""
     if not _ORDER_BY_RE.search(sql):
-        return _SqlShapeResult(
-            _fail(
-                claim_result,
-                check="top_k_sql_shape",
-                reason=(
-                    f"Evidence {evidence.id} SQL missing ORDER BY "
-                    f"(required for ranking)"
-                ),
-            )
+        fail(
+            result,
+            check="top_k_sql_shape",
+            reason=(
+                f"Evidence {evidence.id} SQL missing ORDER BY "
+                f"(required for ranking)"
+            ),
         )
+        return "ASC"
 
     limit_match = _LIMIT_RE.search(sql)
     if not limit_match:
-        return _SqlShapeResult(
-            _fail(
-                claim_result,
-                check="top_k_sql_shape",
-                reason=(
-                    f"Evidence {evidence.id} SQL missing LIMIT "
-                    f"(expected LIMIT {k})"
-                ),
-            )
+        fail(
+            result,
+            check="top_k_sql_shape",
+            reason=(
+                f"Evidence {evidence.id} SQL missing LIMIT "
+                f"(expected LIMIT {k})"
+            ),
         )
+        return "ASC"
 
     limit_value = int(limit_match.group(1))
     if limit_value != k:
-        return _SqlShapeResult(
-            _fail(
-                claim_result,
-                check="top_k_sql_shape",
-                reason=(
-                    f"Evidence {evidence.id} SQL LIMIT {limit_value} "
-                    f"does not match claim k={k}"
-                ),
-            )
+        fail(
+            result,
+            check="top_k_sql_shape",
+            reason=(
+                f"Evidence {evidence.id} SQL LIMIT {limit_value} "
+                f"does not match claim k={k}"
+            ),
         )
+        return "ASC"
 
-    _append_check(claim_result, "top_k_sql_shape")
-    return _SqlShapeResult(claim_result, direction=_order_direction(sql))
+    pass_check(result, "top_k_sql_shape")
+    return _order_direction(sql)
 
 
-def _check_top_k_row_count(
-    k: int, rows: list[list[Any]], evidence: Evidence, claim_result: ClaimVerification
+def _check_row_count(
+    k: int,
+    rows: list[list[Any]],
+    evidence: Evidence,
+    result: ClaimVerification,
 ) -> ClaimVerification:
     actual = len(rows)
-    if actual < k:
-        return _mark_fragile(
-            claim_result,
+    if actual != k:
+        return mark_fragile(
+            result,
             check="top_k_row_count",
             note=f"top_k_row_count expected {k} rows, got {actual}",
         )
-    if actual > k:
-        return _mark_fragile(
-            claim_result,
-            check="top_k_row_count",
-            note=f"top_k_row_count expected {k} rows, got {actual}",
-        )
-    _append_check(claim_result, "top_k_row_count")
-    return claim_result
+    return pass_check(result, "top_k_row_count")
 
 
-def _check_top_k_null_subjects(
-    rows: list[list[Any]], evidence: Evidence, claim_result: ClaimVerification
+# Test helper alias (over-k soft path exercised directly in unit tests).
+_check_top_k_row_count = _check_row_count
+
+
+def _check_null_subjects(
+    rows: list[list[Any]], evidence: Evidence, result: ClaimVerification
 ) -> ClaimVerification:
     for i, row in enumerate(rows):
         if not row or row[0] is None:
-            return _fail(
-                claim_result,
+            return fail(
+                result,
                 check="top_k_null_subject",
                 reason=(
                     f"NULL subject at rank {i + 1} in evidence {evidence.id}"
                 ),
             )
-    _append_check(claim_result, "top_k_null_subject")
-    return claim_result
+    return pass_check(result, "top_k_null_subject")
 
 
-def _check_top_k_subjects(
+def _check_subjects(
     claim: Claim,
     rows: list[list[Any]],
     evidence: Evidence,
-    claim_result: ClaimVerification,
+    result: ClaimVerification,
     *,
     under_k: bool,
 ) -> ClaimVerification:
     if claim.subject is None:
-        return _fail(
-            claim_result,
+        return fail(
+            result,
             check="top_k_subject",
             reason=f"Ranking claim {claim.id} has no subject",
         )
@@ -255,10 +201,9 @@ def _check_top_k_subjects(
     actual_subjects = [row[0] for row in rows if row]
 
     if under_k:
-        # Soft under-k already noted; verify claimed subjects as an ordered prefix.
         if len(subjects) > len(actual_subjects):
-            return _fail(
-                claim_result,
+            return fail(
+                result,
                 check="top_k_subject",
                 reason=(
                     f"Subject list length {len(subjects)} exceeds "
@@ -272,20 +217,19 @@ def _check_top_k_subjects(
             if subjects[i] != actual_subjects[i]
         ]
         if mismatches:
-            return _fail(
-                claim_result,
+            return fail(
+                result,
                 check="top_k_subject",
                 reason=(
                     f"Subject order mismatch in evidence {evidence.id}: "
                     f"{mismatches!r}"
                 ),
             )
-        _append_check(claim_result, "top_k_subject")
-        return claim_result
+        return pass_check(result, "top_k_subject")
 
     if len(subjects) != len(actual_subjects):
-        return _fail(
-            claim_result,
+        return fail(
+            result,
             check="top_k_subject",
             reason=(
                 f"Subject list length {len(subjects)} does not match "
@@ -300,8 +244,8 @@ def _check_top_k_subjects(
         if subjects[i] != actual_subjects[i]
     ]
     if mismatches:
-        return _fail(
-            claim_result,
+        return fail(
+            result,
             check="top_k_subject",
             reason=(
                 f"Subject order mismatch in evidence {evidence.id}: "
@@ -309,8 +253,7 @@ def _check_top_k_subjects(
             ),
         )
 
-    _append_check(claim_result, "top_k_subject")
-    return claim_result
+    return pass_check(result, "top_k_subject")
 
 
 def _metric_column_index(claim: Claim, evidence: Evidence) -> int | None:
@@ -325,9 +268,7 @@ def _metric_column_index(claim: Claim, evidence: Evidence) -> int | None:
     return None
 
 
-def _metric_values(
-    rows: list[list[Any]], metric_idx: int
-) -> list[Any] | None:
+def _metric_values(rows: list[list[Any]], metric_idx: int) -> list[Any] | None:
     values: list[Any] = []
     for row in rows:
         if metric_idx >= len(row):
@@ -336,17 +277,17 @@ def _metric_values(
     return values
 
 
-def _check_top_k_monotonic(
+def _check_monotonic(
     rows: list[list[Any]],
     metric_idx: int,
     direction: Literal["ASC", "DESC"],
     evidence: Evidence,
-    claim_result: ClaimVerification,
+    result: ClaimVerification,
 ) -> ClaimVerification:
     values = _metric_values(rows, metric_idx)
     if values is None:
-        return _fail(
-            claim_result,
+        return fail(
+            result,
             check="top_k_monotonic",
             reason=(
                 f"Metric column index {metric_idx} out of range "
@@ -358,8 +299,8 @@ def _check_top_k_monotonic(
         for i in range(1, len(values)):
             prev, curr = values[i - 1], values[i]
             if prev is None or curr is None:
-                return _fail(
-                    claim_result,
+                return fail(
+                    result,
                     check="top_k_monotonic",
                     reason=(
                         f"NULL metric value in evidence {evidence.id} "
@@ -368,8 +309,8 @@ def _check_top_k_monotonic(
                 )
             if direction == "DESC":
                 if curr > prev:
-                    return _fail(
-                        claim_result,
+                    return fail(
+                        result,
                         check="top_k_monotonic",
                         reason=(
                             f"Metric not non-increasing (DESC) in evidence "
@@ -377,8 +318,8 @@ def _check_top_k_monotonic(
                         ),
                     )
             elif curr < prev:
-                return _fail(
-                    claim_result,
+                return fail(
+                    result,
                     check="top_k_monotonic",
                     reason=(
                         f"Metric not non-decreasing (ASC) in evidence "
@@ -386,8 +327,8 @@ def _check_top_k_monotonic(
                     ),
                 )
     except TypeError:
-        return _fail(
-            claim_result,
+        return fail(
+            result,
             check="top_k_monotonic",
             reason=(
                 f"Metric values not comparable in evidence {evidence.id}: "
@@ -395,20 +336,19 @@ def _check_top_k_monotonic(
             ),
         )
 
-    _append_check(claim_result, "top_k_monotonic")
-    return claim_result
+    return pass_check(result, "top_k_monotonic")
 
 
-def _check_top_k_ties(
+def _check_ties(
     rows: list[list[Any]],
     metric_idx: int,
     evidence: Evidence,
-    claim_result: ClaimVerification,
+    result: ClaimVerification,
 ) -> ClaimVerification:
     values = _metric_values(rows, metric_idx)
     if values is None:
-        return _fail(
-            claim_result,
+        return fail(
+            result,
             check="top_k_ties",
             reason=(
                 f"Metric column index {metric_idx} out of range "
@@ -418,8 +358,8 @@ def _check_top_k_ties(
 
     for i in range(1, len(values)):
         if values[i - 1] is not None and values[i - 1] == values[i]:
-            return _mark_fragile(
-                claim_result,
+            return mark_fragile(
+                result,
                 check="top_k_ties",
                 note=(
                     f"top_k_ties adjacent equal scores at ranks "
@@ -427,20 +367,19 @@ def _check_top_k_ties(
                 ),
             )
 
-    _append_check(claim_result, "top_k_ties")
-    return claim_result
+    return pass_check(result, "top_k_ties")
 
 
-def _check_top_k_non_negative(
+def _check_non_negative(
     rows: list[list[Any]],
     metric_idx: int,
     evidence: Evidence,
-    claim_result: ClaimVerification,
+    result: ClaimVerification,
 ) -> ClaimVerification:
     values = _metric_values(rows, metric_idx)
     if values is None:
-        return _fail(
-            claim_result,
+        return fail(
+            result,
             check="top_k_non_negative",
             reason=(
                 f"Metric column index {metric_idx} out of range "
@@ -451,8 +390,8 @@ def _check_top_k_non_negative(
     try:
         for i, value in enumerate(values):
             if value is not None and value < 0:
-                return _fail(
-                    claim_result,
+                return fail(
+                    result,
                     check="top_k_non_negative",
                     reason=(
                         f"Negative metric value {value!r} at rank {i + 1} "
@@ -460,8 +399,8 @@ def _check_top_k_non_negative(
                     ),
                 )
     except TypeError:
-        return _fail(
-            claim_result,
+        return fail(
+            result,
             check="top_k_non_negative",
             reason=(
                 f"Metric values not comparable for non-negative check "
@@ -469,15 +408,14 @@ def _check_top_k_non_negative(
             ),
         )
 
-    _append_check(claim_result, "top_k_non_negative")
-    return claim_result
+    return pass_check(result, "top_k_non_negative")
 
 
-def _check_top_k_filters(
-    claim: Claim, evidence: Evidence, claim_result: ClaimVerification
+def _check_filters(
+    claim: Claim, evidence: Evidence, result: ClaimVerification
 ) -> ClaimVerification:
     if not claim.filters:
-        return claim_result
+        return result
 
     sql_lower = (evidence.sql or "").lower()
     missing = [
@@ -486,8 +424,8 @@ def _check_top_k_filters(
         if str(value).lower() not in sql_lower
     ]
     if missing:
-        return _fail(
-            claim_result,
+        return fail(
+            result,
             check="top_k_filters",
             reason=(
                 f"Filter values not found in evidence {evidence.id} SQL: "
@@ -495,5 +433,4 @@ def _check_top_k_filters(
             ),
         )
 
-    _append_check(claim_result, "top_k_filters")
-    return claim_result
+    return pass_check(result, "top_k_filters")

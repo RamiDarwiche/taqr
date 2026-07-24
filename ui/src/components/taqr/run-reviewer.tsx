@@ -48,6 +48,7 @@ const CHECK_TOOLTIPS: Record<string, string> = {
     "The claim’s metric name appears in at least one cited evidence SQL statement.",
   top_k_sql_shape:
     "Evidence SQL includes ORDER BY and a LIMIT that matches the claim’s k (required for a ranking).",
+  top_k_k: "The ranking claim includes a required k (top-k size).",
   top_k_row_count:
     "The number of replayed rows matches claim k. Fewer or more rows is treated as fragile underspecification.",
   top_k_null_subject:
