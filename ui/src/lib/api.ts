@@ -107,6 +107,26 @@ export interface CreateRunInput {
   question_id?: number
 }
 
+export interface ThinkingStep {
+  id: string
+  phase: string
+  title: string
+  detail?: string
+  status: "started" | "completed" | string
+}
+
+export interface ThinkingStatus {
+  title: string
+  detail?: string
+  phase?: string
+}
+
+export interface CreateRunStreamHandlers {
+  onStatus?: (status: ThinkingStatus) => void
+  onStep?: (step: ThinkingStep) => void
+  signal?: AbortSignal
+}
+
 const API_ROOT = import.meta.env.TAQR_API_URL || "/api"
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -148,6 +168,70 @@ export const api = {
       method: "POST",
       body: JSON.stringify(input),
     })
+  },
+
+  async createRunStream(
+    input: CreateRunInput,
+    handlers: CreateRunStreamHandlers = {}
+  ): Promise<RunDetail> {
+    const response = await fetch(`${API_ROOT}/runs?stream=true`, {
+      method: "POST",
+      headers: {
+        Accept: "text/event-stream",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(input),
+      signal: handlers.signal,
+    })
+
+    if (!response.ok) {
+      const detail = await response.text()
+      throw new Error(detail || `Request failed with ${response.status}`)
+    }
+    if (!response.body) {
+      throw new Error("Streaming response body was empty")
+    }
+
+    const reader = response.body.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ""
+    let completed: RunDetail | undefined
+
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+
+      let boundary = buffer.indexOf("\n\n")
+      while (boundary >= 0) {
+        const chunk = buffer.slice(0, boundary)
+        buffer = buffer.slice(boundary + 2)
+        boundary = buffer.indexOf("\n\n")
+
+        const parsed = parseSseChunk(chunk)
+        if (!parsed) continue
+
+        if (parsed.event === "status") {
+          handlers.onStatus?.(parsed.data as ThinkingStatus)
+        } else if (parsed.event === "step") {
+          handlers.onStep?.(parsed.data as ThinkingStep)
+        } else if (parsed.event === "done") {
+          const payload = parsed.data as { run?: RunDetail }
+          if (!payload.run) {
+            throw new Error("Stream completed without a run payload")
+          }
+          completed = payload.run
+        } else if (parsed.event === "error") {
+          const payload = parsed.data as { detail?: string }
+          throw new Error(payload.detail || "Run stream failed")
+        }
+      }
+    }
+
+    if (!completed) {
+      throw new Error("Run stream ended before completion")
+    }
+    return completed
   },
 
   getRandomBenchmarkQuestion() {
@@ -213,4 +297,28 @@ export const api = {
       offset,
     } satisfies TablePage
   },
+}
+
+function parseSseChunk(chunk: string): { event: string; data: unknown } | null {
+  let event = "message"
+  const dataLines: string[] = []
+
+  for (const rawLine of chunk.split("\n")) {
+    const line = rawLine.replace(/\r$/, "")
+    if (!line || line.startsWith(":")) continue
+    if (line.startsWith("event:")) {
+      event = line.slice(6).trim()
+      continue
+    }
+    if (line.startsWith("data:")) {
+      dataLines.push(line.slice(5).trimStart())
+    }
+  }
+
+  if (dataLines.length === 0) return null
+  try {
+    return { event, data: JSON.parse(dataLines.join("\n")) }
+  } catch {
+    return { event, data: dataLines.join("\n") }
+  }
 }

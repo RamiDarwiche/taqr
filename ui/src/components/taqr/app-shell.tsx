@@ -8,6 +8,7 @@ import { QueryComposer } from "./query-composer"
 import type { SubmitQuestionInput } from "./query-composer"
 import { RunReviewer } from "./run-reviewer"
 import { TableExplorer } from "./table-explorer"
+import { ThinkingTrace } from "./thinking-trace"
 import { Button } from "@/components/ui/button"
 import {
   Sheet,
@@ -22,6 +23,8 @@ import type {
   RunSummary,
   TablePage,
   TableReference,
+  ThinkingStatus,
+  ThinkingStep,
 } from "@/lib/api"
 
 export function TaqrApp() {
@@ -40,6 +43,9 @@ export function TaqrApp() {
   const [mobileOpen, setMobileOpen] = useState(false)
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const [sessionId, setSessionId] = useState<string>()
+  const [liveQuestion, setLiveQuestion] = useState<string>()
+  const [thinkingSteps, setThinkingSteps] = useState<ThinkingStep[]>([])
+  const [thinkingStatus, setThinkingStatus] = useState<ThinkingStatus>()
 
   useEffect(() => {
     setSessionId(getOrCreateSessionId())
@@ -66,7 +72,7 @@ export function TaqrApp() {
   }, [])
 
   useEffect(() => {
-    if (!selectedRunId) return
+    if (!selectedRunId || submitting) return
     let active = true
     setRunLoading(true)
     setRunError(undefined)
@@ -84,7 +90,7 @@ export function TaqrApp() {
     return () => {
       active = false
     }
-  }, [selectedRunId])
+  }, [selectedRunId, submitting])
 
   const loadTable = useCallback(
     async (table: TableReference, offset: number) => {
@@ -110,12 +116,31 @@ export function TaqrApp() {
     setSubmitting(true)
     setView("runs")
     setRunError(undefined)
+    setLiveQuestion(input.question)
+    setThinkingSteps([])
+    setThinkingStatus({
+      title: "Thinking",
+      detail: "Connecting to the planner…",
+      phase: "thinking",
+    })
+    setSelectedRunId(undefined)
+    setRun(undefined)
     try {
-      const created = await api.createRun({
-        question: input.question,
-        question_id: input.question_id,
-        session_id: sessionId ?? getOrCreateSessionId(),
-      })
+      const created = await api.createRunStream(
+        {
+          question: input.question,
+          question_id: input.question_id,
+          session_id: sessionId ?? getOrCreateSessionId(),
+        },
+        {
+          onStatus: (status) => setThinkingStatus(status),
+          onStep: (step) =>
+            setThinkingSteps((current) => {
+              const without = current.filter((item) => item.id !== step.id)
+              return [...without, step]
+            }),
+        }
+      )
       setRun(created)
       setSelectedRunId(created.id)
       setRuns((current) => [
@@ -126,6 +151,9 @@ export function TaqrApp() {
       setRunError(errorMessage(error))
     } finally {
       setSubmitting(false)
+      setLiveQuestion(undefined)
+      setThinkingSteps([])
+      setThinkingStatus(undefined)
     }
   }
 
@@ -216,9 +244,43 @@ export function TaqrApp() {
           )}
         </AnimatePresence>
 
-        <div className="min-h-0 min-w-0">
+        <div className="relative min-h-0 min-w-0">
           {view === "runs" ? (
-            <RunReviewer run={run} isLoading={runLoading} error={runError} />
+            <AnimatePresence mode="wait">
+              {submitting && liveQuestion ? (
+                <motion.div
+                  key="thinking"
+                  className="h-full"
+                  initial={{ opacity: 0, y: 10, filter: "blur(4px)" }}
+                  animate={{ opacity: 1, y: 0, filter: "blur(0px)" }}
+                  exit={{ opacity: 0, y: -12, filter: "blur(4px)" }}
+                  transition={{ duration: 0.32, ease: [0.22, 1, 0.36, 1] }}
+                >
+                  <ThinkingTrace
+                    question={liveQuestion}
+                    steps={thinkingSteps}
+                    statusTitle={thinkingStatus?.title}
+                    statusDetail={thinkingStatus?.detail}
+                    isActive={submitting}
+                  />
+                </motion.div>
+              ) : (
+                <motion.div
+                  key={run?.id ?? "review-empty"}
+                  className="h-full"
+                  initial={{ opacity: 0, y: 14, filter: "blur(4px)" }}
+                  animate={{ opacity: 1, y: 0, filter: "blur(0px)" }}
+                  exit={{ opacity: 0, y: 8, filter: "blur(2px)" }}
+                  transition={{ duration: 0.36, ease: [0.22, 1, 0.36, 1] }}
+                >
+                  <RunReviewer
+                    run={run}
+                    isLoading={runLoading}
+                    error={runError}
+                  />
+                </motion.div>
+              )}
+            </AnimatePresence>
           ) : (
             <TableExplorer
               table={selectedTable}

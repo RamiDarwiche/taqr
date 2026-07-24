@@ -12,6 +12,8 @@ const config = defineConfig({
       "/api": {
         target: process.env.TAQR_API_URL ?? "http://localhost:8000",
         changeOrigin: true,
+        timeout: 0,
+        proxyTimeout: 0,
       },
     },
   },

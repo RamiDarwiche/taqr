@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import json
 import re
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable, Iterator
 from contextlib import asynccontextmanager
 from datetime import date, datetime
 from decimal import Decimal
@@ -11,7 +12,7 @@ from uuid import UUID, uuid4
 
 from fastapi import FastAPI, Header, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import Engine, inspect, text
 
@@ -97,9 +98,7 @@ def _normalize_run_detail(
             benchmark = dict(raw_benchmark)
         # Keep verification payload focused on claim results for the UI.
         verification = {
-            key: value
-            for key, value in verification.items()
-            if key != "benchmark"
+            key: value for key, value in verification.items() if key != "benchmark"
         }
     if not benchmark:
         benchmark = _resolve_benchmark(
@@ -201,11 +200,120 @@ def _normalize_run_summary(summary: dict[str, Any]) -> dict[str, Any]:
     )
 
 
+def _sse(event: str, data: dict[str, Any]) -> str:
+    return f"event: {event}\ndata: {json.dumps(_json_safe(data), ensure_ascii=False)}\n\n"
+
+
+def _wants_event_stream(request: Request, stream: bool) -> bool:
+    if stream:
+        return True
+    accept = request.headers.get("accept", "")
+    return "text/event-stream" in accept
+
+
+def _finalize_run(
+    *,
+    plan: Any,
+    question: str,
+    session_id: str,
+    run_id: str,
+    db: DB,
+    query_log: QueryLog,
+    benchmark: dict[str, object] | None,
+) -> dict[str, Any]:
+    from verifier.verifier import verify_response
+
+    verified = verify_response(
+        plan,
+        db.get_engine(),
+        query_log,
+        session_id,
+        run_id,
+        query=question,
+    )
+    verification_payload = verified.model_dump(
+        mode="json", include={"status", "claim_results"}
+    )
+    if benchmark is not None:
+        gold_sql = str(benchmark.get("gold_sql") or "")
+        if gold_sql:
+            benchmark = {
+                **benchmark,
+                "result": _execute_gold_sql(db.get_engine(), gold_sql),
+            }
+        verification_payload["benchmark"] = benchmark
+    query_log.log_event(
+        run_id,
+        EventType.QUERY_VERIFICATION,
+        verification_payload,
+    )
+    metadata = query_log.get_run_metadata(run_id)
+    if metadata is None:
+        raise RuntimeError("Completed run was not persisted")
+    return _normalize_run_detail(
+        metadata,
+        query_log.get_run_events(run_id),
+        engine=db.get_engine(),
+    )
+
+
+def _stream_create_run(
+    *,
+    question: str,
+    session_id: str,
+    run_id: str,
+    plan_agent: Any,
+    db: DB,
+    query_log: QueryLog,
+    benchmark: dict[str, object] | None,
+) -> Iterator[str]:
+    yield _sse(
+        "status",
+        {
+            "title": "Thinking",
+            "detail": "The planner is investigating your question",
+            "phase": "thinking",
+        },
+    )
+    plan = None
+    try:
+        for kind, payload in plan_agent.iter_ask(question, session_id, run_id):
+            if kind == "step":
+                yield _sse("step", payload)
+            elif kind == "plan":
+                plan = payload
+        if plan is None:
+            raise RuntimeError("Plan agent finished without a response")
+
+        yield _sse(
+            "status",
+            {
+                "title": "Verifying",
+                "detail": "Replaying evidence and checking claim integrity",
+                "phase": "verify",
+            },
+        )
+        detail = _finalize_run(
+            plan=plan,
+            question=question,
+            session_id=session_id,
+            run_id=run_id,
+            db=db,
+            query_log=query_log,
+            benchmark=benchmark,
+        )
+        yield _sse("done", {"run": detail})
+    except Exception as exc:
+        yield _sse("error", {"detail": str(exc)})
+
+
 def _validated_table(request: Request, schema: str, table: str) -> tuple[str, str]:
     if schema not in ALLOWED_SCHEMAS:
         raise HTTPException(status_code=404, detail="Schema not found")
     if not _IDENTIFIER.fullmatch(schema) or not _IDENTIFIER.fullmatch(table):
-        raise HTTPException(status_code=400, detail="Invalid schema or table identifier")
+        raise HTTPException(
+            status_code=400, detail="Invalid schema or table identifier"
+        )
 
     engine = request.app.state.db.get_engine()
     if table not in inspect(engine).get_table_names(schema=schema):
@@ -246,18 +354,18 @@ def create_app(
         allow_headers=["*"],
     )
 
-    @app.post("/api/runs")
+    @app.post("/api/runs", response_model=None)
     def create_run(
         body: RunRequest,
         request: Request,
         x_session_id: UUID | None = Header(default=None, alias="X-Session-Id"),
-    ) -> JSONResponse:
-        from verifier.verifier import verify_response
-
+        stream: bool = Query(default=False),
+    ):
         session_id = str(body.session_id or x_session_id or uuid4())
         run_id = str(uuid4())
         query_log: QueryLog = request.app.state.query_log
         db: DB = request.app.state.db
+        plan_agent = request.app.state.plan_agent
         benchmark = _resolve_benchmark(
             question_id=body.question_id,
             question=body.question,
@@ -268,45 +376,40 @@ def create_app(
                 detail=f"Unknown benchmark question_id={body.question_id}",
             )
 
+        if _wants_event_stream(request, stream):
+            return StreamingResponse(
+                _stream_create_run(
+                    question=body.question,
+                    session_id=session_id,
+                    run_id=run_id,
+                    plan_agent=plan_agent,
+                    db=db,
+                    query_log=query_log,
+                    benchmark=benchmark,
+                ),
+                media_type="text/event-stream",
+                headers={
+                    "Cache-Control": "no-cache",
+                    "Connection": "keep-alive",
+                    "X-Accel-Buffering": "no",
+                },
+            )
+
         try:
-            plan = request.app.state.plan_agent.ask(body.question, session_id, run_id)
-            verified = verify_response(
-                plan,
-                db.get_engine(),
-                query_log,
-                session_id,
-                run_id,
-                query=body.question,
-            )
-            verification_payload = verified.model_dump(
-                mode="json", include={"status", "claim_results"}
-            )
-            if benchmark is not None:
-                gold_sql = str(benchmark.get("gold_sql") or "")
-                if gold_sql:
-                    benchmark = {
-                        **benchmark,
-                        "result": _execute_gold_sql(db.get_engine(), gold_sql),
-                    }
-                verification_payload["benchmark"] = benchmark
-            query_log.log_event(
-                run_id,
-                EventType.QUERY_VERIFICATION,
-                verification_payload,
+            plan = plan_agent.ask(body.question, session_id, run_id)
+            detail = _finalize_run(
+                plan=plan,
+                question=body.question,
+                session_id=session_id,
+                run_id=run_id,
+                db=db,
+                query_log=query_log,
+                benchmark=benchmark,
             )
         except Exception as exc:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
 
-        metadata = query_log.get_run_metadata(run_id)
-        if metadata is None:
-            raise HTTPException(status_code=500, detail="Completed run was not persisted")
-        return JSONResponse(
-            content=_normalize_run_detail(
-                metadata,
-                query_log.get_run_events(run_id),
-                engine=db.get_engine(),
-            )
-        )
+        return JSONResponse(content=detail)
 
     @app.get("/api/runs")
     def list_runs(
@@ -317,9 +420,7 @@ def create_app(
         rows = request.app.state.query_log.list_run_summaries(
             limit=limit, offset=offset
         )
-        return JSONResponse(
-            content=[_normalize_run_summary(row) for row in rows]
-        )
+        return JSONResponse(content=[_normalize_run_summary(row) for row in rows])
 
     @app.get("/api/runs/{run_id}")
     def get_run(run_id: UUID, request: Request) -> JSONResponse:
@@ -380,9 +481,7 @@ def create_app(
         limit: int = Query(default=50, ge=1, le=MAX_PAGE_SIZE),
         offset: int = Query(default=0, ge=0),
     ) -> JSONResponse:
-        quoted_schema, quoted_table = _validated_table(
-            request, schema, table
-        )
+        quoted_schema, quoted_table = _validated_table(request, schema, table)
         engine = request.app.state.db.get_engine()
         inspector = inspect(engine)
         columns = [
@@ -394,12 +493,19 @@ def create_app(
             for column in inspector.get_columns(table, schema=schema)
         ]
         qualified_name = f"{quoted_schema}.{quoted_table}"
+        order_by = ""
+        if schema == "provenance":
+            if table == "events":
+                order_by = " ORDER BY ts DESC"
+            elif table == "runs":
+                order_by = " ORDER BY start_ts DESC"
+        exec_text = (
+            f"SELECT * FROM {qualified_name}{order_by} "
+            "LIMIT :limit OFFSET :offset"
+        )
         with engine.connect() as conn:
             rows = conn.execute(
-                text(
-                    f"SELECT * FROM {qualified_name} "
-                    "LIMIT :limit OFFSET :offset"
-                ),
+                text(exec_text),
                 {"limit": limit, "offset": offset},
             )
             total = conn.execute(

@@ -1,4 +1,5 @@
 import type { ReactNode } from "react"
+import { format } from "sql-formatter"
 import {
   CheckCircleIcon,
   CircleIcon,
@@ -133,7 +134,7 @@ export function RunReviewer({ run, isLoading, error }: RunReviewerProps) {
               )}
             </div>
             <pre className="overflow-x-auto border bg-muted px-4 py-3 font-mono text-caption leading-5 text-foreground">
-              <code>{run.gold_sql}</code>
+              <code>{format(run.gold_sql, { language: "postgresql" })}</code>
             </pre>
             <GoldResultView result={run.gold_result} />
           </section>
@@ -431,7 +432,7 @@ function EvidenceView({ evidence }: { evidence: Evidence }) {
         <Badge variant="outline">{evidence.row_count} rows</Badge>
       </div>
       <pre className="overflow-x-auto bg-muted px-3 py-2 font-mono text-caption leading-5 text-foreground">
-        <code>{evidence.sql}</code>
+        <code>{format(evidence.sql, { language: "postgresql" })}</code>
       </pre>
       <Table>
         <TableHeader>
