@@ -1,6 +1,6 @@
 import hashlib
 import json
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -18,12 +18,41 @@ def _truncate(value: Any, limit: int = 4000) -> Any:
     return text_value[:limit] + f"... [truncated {len(text_value) - limit} chars]"
 
 
-def _canonicalize_value(value: Any) -> Any:
-    """Normalize a cell so hashing matches JSONB number semantics (40.0 == 40)."""
+def _canonicalize_number(value: Decimal | float | int) -> int | float:
+    """Collapse whole numbers to int so 40, 40.0, and Decimal('40.00') match."""
+    if isinstance(value, bool):
+        # bool is a subclass of int; keep JSON true/false distinct from 0/1.
+        return value
     if isinstance(value, Decimal):
-        value = float(value)
+        integral = value.to_integral_value()
+        if value == integral:
+            return int(integral)
+        return float(value)
     if isinstance(value, float):
         return int(value) if value.is_integer() else value
+    return int(value)
+
+
+def _canonicalize_value(value: Any) -> Any:
+    """Normalize a cell so hashing matches JSON / DB numeric semantics.
+
+    Planner evidence rows often come from LLM-copied tool output (JSON numbers
+    or numeric strings like ``\"40.00\"`` from ``Decimal`` reprs). Verifier
+    replay yields SQLAlchemy ``Decimal`` / ``float`` / ``int``. These must hash
+    identically when they denote the same number.
+    """
+    if value is None or isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        stripped = value.strip()
+        if stripped:
+            try:
+                return _canonicalize_number(Decimal(stripped))
+            except InvalidOperation:
+                pass
+        return value
+    if isinstance(value, (Decimal, float, int)):
+        return _canonicalize_number(value)
     if isinstance(value, dict):
         return {k: _canonicalize_value(v) for k, v in value.items()}
     if isinstance(value, (list, tuple)):

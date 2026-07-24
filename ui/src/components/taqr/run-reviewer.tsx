@@ -23,6 +23,11 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip"
 import type {
   Claim,
   ClaimVerification,
@@ -31,6 +36,33 @@ import type {
   RunDetail,
   ToolCall,
 } from "@/lib/api"
+
+/** Human-readable explanations for verifier check ids shown in the UI. */
+const CHECK_TOOLTIPS: Record<string, string> = {
+  evidence_refs:
+    "Every evidence id cited by the claim exists in the returned evidence set.",
+  hash: "Replaying the evidence SQL produces the same result fingerprint as when the answer was generated.",
+  row_count:
+    "The number of rows returned by replaying the evidence SQL matches the stored evidence row_count.",
+  metric:
+    "The claim’s metric name appears in at least one cited evidence SQL statement.",
+  top_k_sql_shape:
+    "Evidence SQL includes ORDER BY and a LIMIT that matches the claim’s k (required for a ranking).",
+  top_k_row_count:
+    "The number of replayed rows matches claim k. Fewer or more rows is treated as fragile underspecification.",
+  top_k_null_subject:
+    "No NULL values appear in the subject (first) column of the ranking result.",
+  top_k_subject:
+    "Claimed subject(s) match the replayed ranking in order on the first column (rank 1…k).",
+  top_k_monotonic:
+    "Metric scores are monotonic in the ORDER BY direction (non-increasing for DESC, non-decreasing for ASC).",
+  top_k_ties:
+    "Adjacent equal metric scores make the ranking under-specified; marked fragile rather than failed.",
+  top_k_non_negative:
+    "All metric values in the ranking are non-negative.",
+  top_k_filters:
+    "Each claim filter value appears as a substring in the cited evidence SQL.",
+}
 
 interface RunReviewerProps {
   run?: RunDetail
@@ -298,7 +330,7 @@ function ClaimReview({
                           className="flex items-start gap-2 text-muted-foreground"
                         >
                           <CheckCircleIcon className="mt-0.5 shrink-0 text-primary" />
-                          <span>{check}</span>
+                          <VerificationCheckLabel check={check} />
                         </li>
                       ))}
                     </ul>
@@ -331,6 +363,28 @@ function ClaimReview({
         </div>
       </div>
     </article>
+  )
+}
+
+function VerificationCheckLabel({ check }: { check: string }) {
+  const description = CHECK_TOOLTIPS[check]
+  if (!description) {
+    return <span className="font-mono text-xs">{check}</span>
+  }
+
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <span className="cursor-help border-b border-dotted border-muted-foreground/60 font-mono text-xs" />
+        }
+      >
+        {check}
+      </TooltipTrigger>
+      <TooltipContent side="top" className="max-w-xs text-left normal-case">
+        {description}
+      </TooltipContent>
+    </Tooltip>
   )
 }
 

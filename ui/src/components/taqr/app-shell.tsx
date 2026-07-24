@@ -266,7 +266,7 @@ export function TaqrApp() {
                 </motion.div>
               ) : (
                 <motion.div
-                  key={run?.id ?? "review-empty"}
+                  key="review"
                   className="h-full"
                   initial={{ opacity: 0, y: 14, filter: "blur(4px)" }}
                   animate={{ opacity: 1, y: 0, filter: "blur(0px)" }}

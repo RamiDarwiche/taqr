@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import json
 from typing import NamedTuple
 
 from langchain.tools import BaseTool, tool
 from sqlalchemy import Engine, inspect, text
+
+from provenance.utils import _canonicalize_value
 
 
 def _quote_ident(name: str) -> str:
@@ -91,7 +94,14 @@ def make_sql_tools(engine: Engine) -> SqlTools:
         try:
             with engine.connect() as conn:
                 result = conn.execute(text(query))
-                return str(result.fetchall())
+                rows = [list(row) for row in result.fetchall()]
+            # JSON with canonical numbers (not Decimal reprs) so the planner
+            # copies types that fingerprint_rows can match on SQL replay.
+            return json.dumps(
+                _canonicalize_value(rows),
+                ensure_ascii=True,
+                separators=(",", ":"),
+            )
         except Exception as e:
             return f"Error: {e}"
 
