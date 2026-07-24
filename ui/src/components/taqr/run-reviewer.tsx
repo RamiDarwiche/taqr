@@ -319,7 +319,6 @@ function ClaimReview({
               {verification ? (
                 <div className="flex flex-col gap-3">
                   <div className="flex items-center gap-2">
-                    <VerificationIcon status={verification.status} />
                     <VerificationBadge status={verification.status} />
                   </div>
                   {verification.checks.length > 0 && (
@@ -376,12 +375,12 @@ function VerificationCheckLabel({ check }: { check: string }) {
     <Tooltip>
       <TooltipTrigger
         render={
-          <span className="cursor-help border-b border-dotted border-muted-foreground/60 font-mono text-xs" />
+          <span className="cursor-help border-b border-dotted border-muted-foreground/60 font-mono text-xs " />
         }
       >
         {check}
       </TooltipTrigger>
-      <TooltipContent side="top" className="max-w-xs text-left normal-case">
+      <TooltipContent side="top" className="max-w-xs text-left normal-case selection:bg-primary/35 selection:text-white dark:selection:text-black">
         {description}
       </TooltipContent>
     </Tooltip>
@@ -596,18 +595,10 @@ function VerificationBadge({ status }: { status: string }) {
   return (
     <Badge
       variant={status.toUpperCase() === "FAILED" ? "destructive" : "secondary"}
-      className="uppercase"
+      className={`uppercase ${status.toUpperCase() === "FAILED" ? "bg-destructive text-white" : "bg-primary text-white"}`}
     >
       Verification: {status.replace("_", " ")}
     </Badge>
-  )
-}
-
-function VerificationIcon({ status }: { status: string }) {
-  return status.toUpperCase() === "FAILED" ? (
-    <XCircleIcon className="text-destructive" />
-  ) : (
-    <CheckCircleIcon className="text-primary" />
   )
 }
 
