@@ -3,7 +3,7 @@ import os
 from sqlalchemy import create_engine
 from sqlalchemy.engine import Engine
 
-DEFAULT_DATABASE_URL = "postgresql+psycopg://taqr:taqr@localhost:5432/BIRD"
+DEFAULT_DATABASE_URL = "postgresql+psycopg://taqr:taqr@db:5432/BIRD"
 
 
 class DB:
