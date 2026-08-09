@@ -92,6 +92,7 @@ claims:
     k: N | null
     filters: {}
     evidence_ids: [e1]
+    verification_spec: {...} | null
 evidence:
   - id: e1
     sql: |
@@ -116,6 +117,72 @@ Prose outside this structure must be minimal. Claims + evidence are the authorit
 | `k` | For rankings/lists: the intended list length (`1` = “the top …”, `5` = “top 5 …”). Must equal `evidence.row_count` / `len(rows)` for cited ranking evidence. Use `null` for non-ranking types. |
 | `filters` | Flat map of applied predicates (dates, regions, categories, etc.), e.g. `{ period: "2025-Q4" }` or `{ order_date_gte: "2025-10-01", order_date_lte: "2025-12-31" }`. Every filter value should be reflected in the evidence SQL `WHERE`/`HAVING`. Use `{}` if none. |
 | `evidence_ids` | IDs of evidence blocks that support this claim. Every id must exist; every evidence block must be cited by ≥1 claim. |
+| `verification_spec` | Required for `AGGREGATION`, `COMPARISON`, `TREND`, `EXISTENCE`, and `DISTRIBUTION`; `null` for `RANKING_TOP_K`. Copy expected values and column aliases directly from evidence. |
+
+#### Typed verification specs
+
+The `kind` must exactly match `claim_type`. Column fields must name entries in
+`evidence.columns`; do not use SQL expressions or ordinal positions.
+
+```yaml
+# AGGREGATION
+verification_spec:
+  kind: AGGREGATION
+  operation: SUM             # SUM | COUNT | AVG | MIN | MAX
+  value_column: revenue
+  expected_value: 39800
+  scope: scalar              # scalar | grouped
+  subject_column: null
+  non_negative: true
+
+# COMPARISON
+verification_spec:
+  kind: COMPARISON
+  left_subject: Alice
+  right_subject: Bob
+  subject_column: customer_name
+  value_column: revenue
+  operator: GT               # GT | GTE | LT | LTE | EQ | NE
+  expected_left_value: 120
+  expected_right_value: 100
+  delta_mode: percent        # optional: absolute | percent
+  expected_delta: 20
+
+# TREND
+verification_spec:
+  kind: TREND
+  time_column: quarter
+  value_column: revenue
+  start_period: 2025-Q3
+  end_period: 2025-Q4
+  expected_start_value: 100
+  expected_end_value: 112
+  direction: increased       # increased | decreased | unchanged
+  change_mode: percent       # optional: absolute | percent
+  expected_change: 12
+  require_monotonic: false
+
+# EXISTENCE
+verification_spec:
+  kind: EXISTENCE
+  exists: false
+  mode: rows                 # rows | count | boolean
+  result_column: null        # required for count/boolean
+  subject_column: null
+
+# DISTRIBUTION
+verification_spec:
+  kind: DISTRIBUTION
+  category_column: region
+  value_column: order_share
+  value_mode: percent        # count | share | percent
+  expected_values: { West: 60, East: 40 }
+  complete: true             # false when evidence intentionally covers a subset
+```
+
+For averages and percentages, use `operation: AVG`. The SQL may use either
+`AVG(value)` directly or the mathematically equivalent
+`SUM(value) / COUNT(*)` form, including a summed `CASE` indicator.
 
 ### 5.2 Claim type taxonomy
 
@@ -242,8 +309,16 @@ claims:
     subject: Alice
     metric: revenue
     k: 1
-    filters: { period: "2025-Q4" }
+    filters: { order_date_gte: "2025-10-01", order_date_lt: "2026-01-01" }
     evidence_ids: [e1]
+    verification_spec:
+      kind: AGGREGATION
+      operation: SUM
+      value_column: revenue
+      expected_value: 39800
+      scope: scalar
+      subject_column: null
+      non_negative: true
 evidence:
   - id: e1
     sql: |
@@ -273,7 +348,7 @@ claims:
     subject: [Alice, Bob, Carol, Dave, Eve]
     metric: revenue
     k: 5
-    filters: { period: "2025-Q4" }
+    filters: { order_date_gte: "2025-10-01", order_date_lt: "2026-01-01" }
     evidence_ids: [e1]
 evidence:
   - id: e1
@@ -308,7 +383,7 @@ claims:
     subject: null
     metric: revenue
     k: null
-    filters: { period: "2025-Q4" }
+    filters: { order_date_gte: "2025-10-01", order_date_lt: "2026-01-01" }
     evidence_ids: [e1]
 evidence:
   - id: e1
@@ -334,6 +409,12 @@ claims:
     k: null
     filters: { amount_lt: 0 }
     evidence_ids: [e1]
+    verification_spec:
+      kind: EXISTENCE
+      exists: false
+      mode: rows
+      result_column: null
+      subject_column: null
 evidence:
   - id: e1
     sql: |
@@ -345,6 +426,110 @@ evidence:
     rows: []
     row_count: 0
     columns: [order_id, amount]
+    result_fingerprint: null
+```
+
+### Example E — Comparison
+
+```yaml
+claims:
+  - claim_text: "Alice's revenue of 120 exceeded Bob's revenue of 100 by 20%."
+    claim_type: COMPARISON
+    subject: [Alice, Bob]
+    metric: revenue
+    k: null
+    filters: {}
+    evidence_ids: [e1]
+    verification_spec:
+      kind: COMPARISON
+      left_subject: Alice
+      right_subject: Bob
+      subject_column: customer_name
+      value_column: revenue
+      operator: GT
+      expected_left_value: 120
+      expected_right_value: 100
+      delta_mode: percent
+      expected_delta: 20
+evidence:
+  - id: e1
+    sql: |
+      SELECT customer_name, SUM(amount) AS revenue
+      FROM orders
+      WHERE customer_name IN ('Alice', 'Bob')
+      GROUP BY customer_name
+      ORDER BY customer_name
+    rows: [[Alice, 120], [Bob, 100]]
+    row_count: 2
+    columns: [customer_name, revenue]
+    result_fingerprint: null
+```
+
+### Example F — Trend
+
+```yaml
+claims:
+  - claim_text: "Revenue increased from 100 in 2025-Q3 to 112 in 2025-Q4, a 12% increase."
+    claim_type: TREND
+    subject: null
+    metric: revenue
+    k: null
+    filters: { start_period: "2025-Q3", end_period: "2025-Q4" }
+    evidence_ids: [e1]
+    verification_spec:
+      kind: TREND
+      time_column: quarter
+      value_column: revenue
+      start_period: 2025-Q3
+      end_period: 2025-Q4
+      expected_start_value: 100
+      expected_end_value: 112
+      direction: increased
+      change_mode: percent
+      expected_change: 12
+      require_monotonic: false
+evidence:
+  - id: e1
+    sql: |
+      SELECT quarter, SUM(amount) AS revenue
+      FROM quarterly_orders
+      WHERE quarter IN ('2025-Q3', '2025-Q4')
+      GROUP BY quarter
+      ORDER BY quarter
+    rows: [[2025-Q3, 100], [2025-Q4, 112]]
+    row_count: 2
+    columns: [quarter, revenue]
+    result_fingerprint: null
+```
+
+### Example G — Distribution
+
+```yaml
+claims:
+  - claim_text: "West represented 60% of orders and East represented 40%."
+    claim_type: DISTRIBUTION
+    subject: [West, East]
+    metric: order_share
+    k: null
+    filters: {}
+    evidence_ids: [e1]
+    verification_spec:
+      kind: DISTRIBUTION
+      category_column: region
+      value_column: order_share
+      value_mode: percent
+      expected_values: { West: 60, East: 40 }
+      complete: true
+evidence:
+  - id: e1
+    sql: |
+      SELECT region, 100.0 * COUNT(*) / SUM(COUNT(*)) OVER () AS order_share
+      FROM orders
+      GROUP BY region
+      ORDER BY region
+    rows: [[East, 40], [West, 60]]
+    row_count: 2
+    columns: [region, order_share]
     result_fingerprint: null
 ```
 

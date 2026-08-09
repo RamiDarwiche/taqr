@@ -44,8 +44,13 @@ const CHECK_TOOLTIPS: Record<string, string> = {
   hash: "Replaying the evidence SQL produces the same result fingerprint as when the answer was generated.",
   row_count:
     "The number of rows returned by replaying the evidence SQL matches the stored evidence row_count.",
+  sql_safety:
+    "Evidence is exactly one parseable, read-only PostgreSQL query and replayed without error.",
+  columns:
+    "Replayed row widths and declared evidence columns agree with the SQL projection.",
   metric:
-    "The claim’s metric name appears in at least one cited evidence SQL statement.",
+    "The claim’s metric resolves to an exact projected alias in cited evidence.",
+  filters: "Every declared filter value occurs in a WHERE or HAVING predicate.",
   top_k_sql_shape:
     "Evidence SQL includes ORDER BY and a LIMIT that matches the claim’s k (required for a ranking).",
   top_k_k: "The ranking claim includes a required k (top-k size).",
@@ -59,10 +64,53 @@ const CHECK_TOOLTIPS: Record<string, string> = {
     "Metric scores are monotonic in the ORDER BY direction (non-increasing for DESC, non-decreasing for ASC).",
   top_k_ties:
     "Adjacent equal metric scores make the ranking under-specified; marked fragile rather than failed.",
-  top_k_non_negative:
-    "All metric values in the ranking are non-negative.",
+  top_k_non_negative: "All metric values in the ranking are non-negative.",
   top_k_filters:
-    "Each claim filter value appears as a substring in the cited evidence SQL.",
+    "Each ranking filter value occurs in a WHERE or HAVING predicate.",
+  aggregation_contract: "The claim has a matching typed aggregation contract.",
+  aggregation_sql_shape:
+    "SQL uses the declared aggregate operation and scalar/grouped shape.",
+  aggregation_columns: "The declared aggregate columns resolve unambiguously.",
+  aggregation_cardinality:
+    "The aggregation returns the expected number of rows.",
+  aggregation_subject: "A grouped aggregate resolves the claimed subject once.",
+  aggregation_value:
+    "The replayed aggregate matches the declared expected value.",
+  aggregation_invariant: "COUNT and opt-in domain constraints hold.",
+  comparison_contract: "The claim has a matching typed comparison contract.",
+  comparison_columns:
+    "Comparison subject and value columns resolve unambiguously.",
+  comparison_subjects: "Both distinct subjects resolve to exactly one value.",
+  comparison_values: "Both replayed operands match their declared values.",
+  comparison_relation: "The declared relation holds between replayed operands.",
+  comparison_delta: "The absolute or percent difference recomputes correctly.",
+  trend_contract: "The claim has a matching typed trend contract.",
+  trend_sql_shape:
+    "Multi-row trend evidence has a deterministic ascending order.",
+  trend_columns: "Trend time and value columns resolve unambiguously.",
+  trend_periods: "Trend periods are unique, present, and ordered start-to-end.",
+  trend_values: "Replayed endpoint values match the typed trend contract.",
+  trend_direction: "The endpoint direction agrees with the claim.",
+  trend_change: "The absolute or percent change recomputes correctly.",
+  trend_monotonic: "Every series step follows the required direction.",
+  existence_contract: "The claim has a matching typed existence contract.",
+  existence_sql_shape: "Absence evidence has definitive, non-offset semantics.",
+  existence_polarity:
+    "Rows, count, or boolean evidence agrees with exists/absent.",
+  existence_subject: "A claimed present subject occurs in replayed evidence.",
+  existence_value:
+    "Count or boolean existence evidence is valid and unambiguous.",
+  distribution_contract:
+    "The claim has a matching typed distribution contract.",
+  distribution_sql_shape: "A complete distribution uses grouped aggregate SQL.",
+  distribution_columns: "Category and value columns resolve unambiguously.",
+  distribution_categories:
+    "Categories are unique, non-null, and match the contract.",
+  distribution_values:
+    "Category values match and satisfy mode-specific bounds.",
+  distribution_total: "A complete share/percent distribution sums to 1/100.",
+  distribution_coverage:
+    "The contract intentionally covers only part of a distribution.",
 }
 
 interface RunReviewerProps {
@@ -336,7 +384,7 @@ function ClaimReview({
                     </ul>
                   )}
                   {verification.failure_reason && (
-                    <p className="border-l-2 border-destructive pl-3 text-caption text-destructive break-words">
+                    <p className="border-l-2 border-destructive pl-3 text-caption break-words text-destructive">
                       Failure: {verification.failure_reason}
                     </p>
                   )}
@@ -376,12 +424,15 @@ function VerificationCheckLabel({ check }: { check: string }) {
     <Tooltip>
       <TooltipTrigger
         render={
-          <span className="cursor-help border-b border-dotted border-muted-foreground/60 font-mono text-xs " />
+          <span className="cursor-help border-b border-dotted border-muted-foreground/60 font-mono text-xs" />
         }
       >
         {check}
       </TooltipTrigger>
-      <TooltipContent side="top" className="max-w-xs text-left normal-case selection:bg-primary/35 selection:text-white dark:selection:text-black">
+      <TooltipContent
+        side="top"
+        className="max-w-xs text-left normal-case selection:bg-primary/35 selection:text-white dark:selection:text-black"
+      >
         {description}
       </TooltipContent>
     </Tooltip>
@@ -596,7 +647,7 @@ function VerificationBadge({ status }: { status: string }) {
   return (
     <Badge
       variant={status.toUpperCase() === "FAILED" ? "destructive" : "secondary"}
-      className={`uppercase ${status.toUpperCase() === "FAILED" ? "bg-destructive dark:bg-destructive text-white" : "bg-primary dark:bg-primary/80 text-white"}`}
+      className={`uppercase ${status.toUpperCase() === "FAILED" ? "bg-destructive text-white dark:bg-destructive" : "bg-primary text-white dark:bg-primary/80"}`}
     >
       Verification: {status.replace("_", " ")}
     </Badge>

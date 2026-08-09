@@ -1,15 +1,15 @@
 import { AnimatePresence, motion } from "motion/react"
 import {
-  BrainIcon,
   CheckCircleIcon,
   CircleNotchIcon,
   SparkleIcon,
 } from "@phosphor-icons/react"
-
+import { ThinkingOrb } from "thinking-orbs"
 import { Badge } from "@/components/ui/badge"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import type { ThinkingStep } from "@/lib/api"
 import { cn } from "@/lib/utils"
+import { useTheme } from "@/hooks/use-theme"
 
 interface ThinkingTraceProps {
   question: string
@@ -26,6 +26,7 @@ export function ThinkingTrace({
   statusDetail,
   isActive,
 }: ThinkingTraceProps) {
+  const { theme } = useTheme()
   return (
     <ScrollArea className="h-full">
       <main className="mx-auto flex max-w-5xl flex-col px-5 pt-8 pb-16 md:px-10 md:pt-12">
@@ -49,12 +50,19 @@ export function ThinkingTrace({
           className="mt-8 border bg-muted/40 md:mt-10"
         >
           <div className="flex items-start gap-3 border-b px-4 py-3 md:px-5">
-            <span className="mt-0.5 flex size-7 items-center justify-center border bg-background text-primary">
-              <BrainIcon className="size-3.5" weight="duotone" />
+            <span className="mt-0.5 flex size-7 items-center justify-center bg-background text-primary">
+              <ThinkingOrb
+                size={64}
+                theme={theme === "dark" ? "dark" : "light"}
+                state="composing"
+                style={{ backgroundColor: "transparent" }}
+              />
             </span>
             <div className="min-w-0 flex-1">
               <div className="flex flex-wrap items-center gap-2">
-                <p className="text-xs font-medium tracking-tight">{statusTitle}</p>
+                <p className="text-xs font-medium tracking-tight">
+                  {statusTitle}
+                </p>
                 {isActive && <ThinkingDots />}
               </div>
               <p className="mt-1 text-caption leading-4 text-muted-foreground">
@@ -76,7 +84,9 @@ export function ThinkingTrace({
                 >
                   <StepGlyph status={step.status} />
                   <div className="min-w-0">
-                    <p className="text-xs font-medium leading-4">{step.title}</p>
+                    <p className="text-xs leading-4 font-medium">
+                      {step.title}
+                    </p>
                     {step.detail && (
                       <p
                         className={cn(
@@ -84,7 +94,7 @@ export function ThinkingTrace({
                           step.phase === "run_query" ||
                             step.phase === "generate_query" ||
                             step.phase === "check_query"
-                            ? "whitespace-pre-wrap break-words"
+                            ? "break-words whitespace-pre-wrap"
                             : "truncate"
                         )}
                         title={step.detail}
@@ -108,7 +118,7 @@ export function ThinkingTrace({
                   <SparkleIcon className="size-3.5 animate-pulse text-primary" />
                 </span>
                 <div>
-                  <p className="text-xs font-medium leading-4 text-muted-foreground">
+                  <p className="text-xs leading-4 font-medium text-muted-foreground">
                     Still working
                   </p>
                   <p className="mt-1 text-stat text-muted-foreground">

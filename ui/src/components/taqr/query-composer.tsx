@@ -1,11 +1,18 @@
 import { useEffect, useState } from "react"
 import type { FormEvent, KeyboardEvent } from "react"
-import { ArrowUpIcon, ShuffleIcon, SpinnerGapIcon } from "@phosphor-icons/react"
+import {
+  ArrowUpIcon,
+  ShieldWarningIcon,
+  ShuffleIcon,
+  SpinnerGapIcon,
+} from "@phosphor-icons/react"
 
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import { api } from "@/lib/api"
-import type { BenchmarkQuestion } from "@/lib/api"
+import type { AdversarialQuestion, BenchmarkQuestion } from "@/lib/api"
+
+type SuggestionKind = "benchmark" | "adversarial"
 
 export interface SubmitQuestionInput {
   question: string
@@ -21,6 +28,8 @@ export function QueryComposer({ onSubmit, isSubmitting }: QueryComposerProps) {
   const [question, setQuestion] = useState("")
   const [activeQuestionId, setActiveQuestionId] = useState<number>()
   const [suggested, setSuggested] = useState<BenchmarkQuestion>()
+  const [suggestionKind, setSuggestionKind] =
+    useState<SuggestionKind>("benchmark")
   const [suggestionLoading, setSuggestionLoading] = useState(false)
   const [suggestionError, setSuggestionError] = useState<string>()
 
@@ -28,11 +37,15 @@ export function QueryComposer({ onSubmit, isSubmitting }: QueryComposerProps) {
     void loadSuggestion()
   }, [])
 
-  async function loadSuggestion() {
+  async function loadSuggestion(kind: SuggestionKind = "benchmark") {
     setSuggestionLoading(true)
+    setSuggestionKind(kind)
     setSuggestionError(undefined)
     try {
-      const next = await api.getRandomBenchmarkQuestion()
+      const next =
+        kind === "adversarial"
+          ? await api.getRandomAdversarialQuestion()
+          : await api.getRandomBenchmarkQuestion()
       setSuggested(next)
       setQuestion(next.question)
       setActiveQuestionId(next.question_id)
@@ -40,7 +53,9 @@ export function QueryComposer({ onSubmit, isSubmitting }: QueryComposerProps) {
       setSuggestionError(
         error instanceof Error
           ? error.message
-          : "Could not load a benchmark question."
+          : `Could not load ${
+              kind === "adversarial" ? "an adversarial" : "a benchmark"
+            } question.`
       )
     } finally {
       setSuggestionLoading(false)
@@ -59,7 +74,7 @@ export function QueryComposer({ onSubmit, isSubmitting }: QueryComposerProps) {
       question: value,
       question_id: questionId,
     })
-    await loadSuggestion()
+    await loadSuggestion(suggestionKind)
   }
 
   function handleKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
@@ -80,14 +95,23 @@ export function QueryComposer({ onSubmit, isSubmitting }: QueryComposerProps) {
 
   return (
     <div className="border-t bg-background/95 px-4 py-3 backdrop-blur md:px-8 md:py-4">
-      <div className="mx-auto mb-2 flex max-w-4xl flex-wrap items-center justify-between gap-2">
+      <div className="mx-auto mb-2 flex max-w-4xl flex-nowrap items-center justify-between gap-2">
         <div className="min-w-0">
           <p className="text-caption font-semibold tracking-[0.14em] text-muted-foreground uppercase">
-            BIRD MiniDev question
+            {suggestionKind === "adversarial"
+              ? "Adversarial verifier challenge"
+              : "BIRD MiniDev question"}
           </p>
           {suggested ? (
             <p className="mt-0.5 truncate text-xs text-muted-foreground">
-              #{suggested.question_id} · {suggested.db_id} · {suggested.difficulty}
+              #{suggested.question_id} · {suggested.db_id} ·{" "}
+              {suggested.difficulty}
+              {suggestionKind === "adversarial" &&
+              "adversarial_tags" in suggested
+                ? ` · ${(suggested as AdversarialQuestion).adversarial_tags
+                    .slice(0, 2)
+                    .join(", ")}`
+                : null}
             </p>
           ) : suggestionError ? (
             <p className="mt-0.5 text-xs text-destructive">{suggestionError}</p>
@@ -96,21 +120,51 @@ export function QueryComposer({ onSubmit, isSubmitting }: QueryComposerProps) {
               Loading a random benchmark question…
             </p>
           )}
+          {suggestionKind === "adversarial" &&
+          suggested &&
+          "attack" in suggested &&
+          (suggested as AdversarialQuestion).attack ? (
+            <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">
+              Trap: {(suggested as AdversarialQuestion).attack}
+            </p>
+          ) : null}
         </div>
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          disabled={suggestionLoading || isSubmitting}
-          onClick={() => void loadSuggestion()}
-        >
-          {suggestionLoading ? (
-            <SpinnerGapIcon data-icon="inline-start" className="animate-spin" />
-          ) : (
-            <ShuffleIcon data-icon="inline-start" />
-          )}
-          Another question
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={suggestionLoading || isSubmitting}
+            onClick={() => void loadSuggestion("adversarial")}
+          >
+            {suggestionLoading && suggestionKind === "adversarial" ? (
+              <SpinnerGapIcon
+                data-icon="inline-start"
+                className="animate-spin"
+              />
+            ) : (
+              <ShieldWarningIcon data-icon="inline-start" />
+            )}
+            Adversarial question
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={suggestionLoading || isSubmitting}
+            onClick={() => void loadSuggestion("benchmark")}
+          >
+            {suggestionLoading && suggestionKind === "benchmark" ? (
+              <SpinnerGapIcon
+                data-icon="inline-start"
+                className="animate-spin"
+              />
+            ) : (
+              <ShuffleIcon data-icon="inline-start" />
+            )}
+            Another question
+          </Button>
+        </div>
       </div>
       <form
         onSubmit={(event) => void submit(event)}
@@ -144,7 +198,8 @@ export function QueryComposer({ onSubmit, isSubmitting }: QueryComposerProps) {
         </div>
       </form>
       <p className="mx-auto mt-2 max-w-4xl text-center text-caption text-muted-foreground">
-        TAQR can make mistakes. Compare agent SQL against the MiniDev gold standard.
+        TAQR can make mistakes. Compare agent SQL against the MiniDev gold
+        standard.
       </p>
     </div>
   )

@@ -19,12 +19,23 @@ services:
     build:
       context: ./ui
       dockerfile: Dockerfile
+    environment:
+      # for watch to work on wsl2
+      CHOKIDAR_USEPOLLING: "true"
+      WATCHPACK_POLLING: "true"
     env_file:
       - .env.local
     ports:
       - "3000:3000"
     depends_on:
       - db
+    develop:
+      watch:
+        - action: sync
+          path: ./ui/src
+          target: /app/src
+        - action: rebuild
+          path: ./ui/package.json
 
   backend:
     build:
@@ -36,5 +47,23 @@ services:
       - "8000:8000"
     depends_on:
       - db
+    develop:
+      watch:
+        - action: sync
+          path: .
+          target: /app
+          ignore:
+            - /ui
+            - /.git
+            - /.venv
+            - /__pycache__
+            - "**/__pycache__"
+            - /.pytest_cache
+            - /.ruff_cache
+        - action: rebuild
+          path: ./pyproject.toml
+          ignore:
+            - /ui
+
 volumes:
   taqr_pgdata:

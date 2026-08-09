@@ -202,7 +202,7 @@ function formatCell(value: unknown, type: string): string {
   }
 
   // Presuming all timestamps are in UTC for now
-  if (type?.toLowerCase() === "timestamp") { 
+  if (type.toLowerCase() === "timestamp") {
     return new Date(String(value) + "Z").toLocaleString()
   }
   return String(value)

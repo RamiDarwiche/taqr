@@ -6,12 +6,10 @@ Registered in ``verifier.verifier.CLAIM_VERIFIERS``. Status updates go through
 
 from __future__ import annotations
 
-import re
 from typing import Any, Literal
 
-from sqlalchemy import Engine, text
+from sqlalchemy import Engine
 
-from logger import logger
 from planner.schemas import Claim, Evidence
 from verifier.base import (
     fail,
@@ -21,20 +19,19 @@ from verifier.base import (
     pass_check,
     run_checks,
 )
+from verifier.context import VerificationContext, build_context
 from verifier.schemas import ClaimVerification
-
-_ORDER_BY_RE = re.compile(r"\border\s+by\b", re.IGNORECASE)
-_ORDER_DIR_RE = re.compile(
-    r"\border\s+by\b[\s\S]*?\b(asc|desc)\b",
-    re.IGNORECASE,
+from verifier.sql_analysis import (
+    filter_literals,
+    limit_value,
+    order_direction,
+    ordered_columns,
 )
-_LIMIT_RE = re.compile(r"\blimit\s+(\d+)\b", re.IGNORECASE)
 
 
 def verify(
     claim: Claim,
-    evidence: list[Evidence],
-    engine: Engine,
+    context: VerificationContext,
     result: ClaimVerification,
 ) -> ClaimVerification:
     """Run ranking-specific checks; mutate and return ``result``."""
@@ -46,69 +43,76 @@ def verify(
             reason="top-k ranking claim has no k value",
         )
 
-    evidence_by_id = {e.id: e for e in evidence}
     for evidence_id in claim.evidence_ids:
-        e = evidence_by_id.get(evidence_id)
-        if e is None:
+        replay = context.replays.get(evidence_id)
+        if replay is None:
             return fail(
                 result,
                 check="evidence_refs",
                 reason=f"claim references unknown evidence id: {evidence_id}",
             )
+        if replay.error or replay.query is None or replay.rows is None:
+            return fail(
+                result,
+                check="sql_safety",
+                reason=f"evidence {evidence_id} is not replayable: {replay.error}",
+            )
+        e = replay.evidence
 
-        direction = _check_sql_shape(k, e, result)
+        direction = _check_sql_shape(k, claim.metric, e, replay.query, result)
         if is_failed(result):
             return result
 
-        with engine.connect() as conn:
-            rows = [list(row) for row in conn.execute(text(e.sql)).fetchall()]
-            logger.trace(f"SQL replay rows:\n{rows}")
+        rows = replay.rows
+        under_k = len(rows) < k
+        metric_idx = _metric_column_index(claim, e)
 
-            under_k = len(rows) < k
-            metric_idx = _metric_column_index(claim, e)
+        steps = [
+            lambda: _check_row_count(k, rows, e, result),
+            lambda: _check_null_subjects(rows, e, result),
+            lambda: _check_subjects(claim, rows, e, result, under_k=under_k),
+        ]
+        if metric_idx is not None:
+            idx = metric_idx
+            steps.extend(
+                [
+                    lambda: _check_monotonic(rows, idx, direction, e, result),
+                    lambda: _check_ties(rows, idx, e, result),
+                    lambda: _check_non_negative(rows, idx, e, result),
+                ]
+            )
+        steps.append(lambda: _check_filters(claim, replay.query, e, result))
 
-            steps = [
-                lambda: _check_row_count(k, rows, e, result),
-                lambda: _check_null_subjects(rows, e, result),
-                lambda: _check_subjects(
-                    claim, rows, e, result, under_k=under_k
-                ),
-            ]
-            if metric_idx is not None:
-                idx = metric_idx
-                steps.extend(
-                    [
-                        lambda: _check_monotonic(
-                            rows, idx, direction, e, result
-                        ),
-                        lambda: _check_ties(rows, idx, e, result),
-                        lambda: _check_non_negative(rows, idx, e, result),
-                    ]
-                )
-            steps.append(lambda: _check_filters(claim, e, result))
-
-            if is_failed(run_checks(result, *steps)):
-                return result
+        if is_failed(run_checks(result, *steps)):
+            return result
 
     return finalize_claim(result)
 
 
-# Back-compat alias for callers/tests that used the old name.
-verify_top_k_ranking = verify
-
-
-def _order_direction(sql: str) -> Literal["ASC", "DESC"]:
-    match = _ORDER_DIR_RE.search(sql)
-    if match and match.group(1).upper() == "DESC":
-        return "DESC"
-    return "ASC"
+def verify_top_k_ranking(
+    claim: Claim,
+    evidence: list[Evidence],
+    engine: Engine,
+    result: ClaimVerification,
+) -> ClaimVerification:
+    """Backward-compatible direct entry point; production uses shared context."""
+    context = build_context(
+        evidence,
+        engine,
+        referenced_ids=set(claim.evidence_ids),
+    )
+    return verify(claim, context, result)
 
 
 def _check_sql_shape(
-    k: int, evidence: Evidence, result: ClaimVerification
+    k: int,
+    metric: str | None,
+    evidence: Evidence,
+    query: Any,
+    result: ClaimVerification,
 ) -> Literal["ASC", "DESC"]:
-    sql = evidence.sql or ""
-    if not _ORDER_BY_RE.search(sql):
+    direction = order_direction(query)
+    if direction is None:
         fail(
             result,
             check="top_k_sql_shape",
@@ -119,8 +123,8 @@ def _check_sql_shape(
         )
         return "ASC"
 
-    limit_match = _LIMIT_RE.search(sql)
-    if not limit_match:
+    actual_limit = limit_value(query)
+    if actual_limit is None:
         fail(
             result,
             check="top_k_sql_shape",
@@ -131,20 +135,29 @@ def _check_sql_shape(
         )
         return "ASC"
 
-    limit_value = int(limit_match.group(1))
-    if limit_value != k:
+    if actual_limit != k:
         fail(
             result,
             check="top_k_sql_shape",
             reason=(
-                f"Evidence {evidence.id} SQL LIMIT {limit_value} "
+                f"Evidence {evidence.id} SQL LIMIT {actual_limit} "
                 f"does not match claim k={k}"
+            ),
+        )
+        return "ASC"
+    if metric and metric.casefold() not in ordered_columns(query):
+        fail(
+            result,
+            check="top_k_sql_shape",
+            reason=(
+                f"Evidence {evidence.id} SQL must ORDER BY metric "
+                f"{metric!r}"
             ),
         )
         return "ASC"
 
     pass_check(result, "top_k_sql_shape")
-    return _order_direction(sql)
+    return direction
 
 
 def _check_row_count(
@@ -412,16 +425,19 @@ def _check_non_negative(
 
 
 def _check_filters(
-    claim: Claim, evidence: Evidence, result: ClaimVerification
+    claim: Claim,
+    query: Any,
+    evidence: Evidence,
+    result: ClaimVerification,
 ) -> ClaimVerification:
     if not claim.filters:
-        return result
+        return pass_check(result, "top_k_filters")
 
-    sql_lower = (evidence.sql or "").lower()
+    literals = filter_literals(query)
     missing = [
         f"{key}={value!r}"
         for key, value in claim.filters.items()
-        if str(value).lower() not in sql_lower
+        if str(value).casefold() not in literals
     ]
     if missing:
         return fail(

@@ -17,6 +17,59 @@ export interface Evidence {
   result_fingerprint: string | null
 }
 
+type NumericValue = number | string
+
+export type VerificationSpec =
+  | {
+      kind: "AGGREGATION"
+      operation: "SUM" | "COUNT" | "AVG" | "MIN" | "MAX"
+      value_column: string
+      expected_value: NumericValue
+      scope: "scalar" | "grouped"
+      subject_column?: string | null
+      non_negative: boolean
+    }
+  | {
+      kind: "COMPARISON"
+      left_subject: string
+      right_subject: string
+      subject_column: string
+      value_column: string
+      operator: "GT" | "GTE" | "LT" | "LTE" | "EQ" | "NE"
+      expected_left_value: NumericValue
+      expected_right_value: NumericValue
+      delta_mode?: "absolute" | "percent" | null
+      expected_delta?: NumericValue | null
+    }
+  | {
+      kind: "TREND"
+      time_column: string
+      value_column: string
+      start_period: string
+      end_period: string
+      expected_start_value: NumericValue
+      expected_end_value: NumericValue
+      direction: "increased" | "decreased" | "unchanged"
+      change_mode?: "absolute" | "percent" | null
+      expected_change?: NumericValue | null
+      require_monotonic: boolean
+    }
+  | {
+      kind: "EXISTENCE"
+      exists: boolean
+      mode: "rows" | "count" | "boolean"
+      result_column?: string | null
+      subject_column?: string | null
+    }
+  | {
+      kind: "DISTRIBUTION"
+      category_column: string
+      value_column: string
+      value_mode: "count" | "share" | "percent"
+      expected_values: Record<string, NumericValue>
+      complete: boolean
+    }
+
 export interface Claim {
   id: string
   claim_text: string
@@ -26,6 +79,7 @@ export interface Claim {
   k: number | null
   filters: Record<string, unknown>
   evidence_ids: string[]
+  verification_spec?: VerificationSpec | null
 }
 
 export interface ClaimVerification {
@@ -81,6 +135,11 @@ export interface BenchmarkQuestion {
   evidence: string
   gold_sql: string
   difficulty: string
+}
+
+export interface AdversarialQuestion extends BenchmarkQuestion {
+  adversarial_tags: string[]
+  attack?: string
 }
 
 export interface TableReference {
@@ -197,7 +256,7 @@ export const api = {
     let buffer = ""
     let completed: RunDetail | undefined
 
-    while (true) {
+    for (;;) {
       const { done, value } = await reader.read()
       if (done) break
       buffer += decoder.decode(value, { stream: true })
@@ -236,6 +295,10 @@ export const api = {
 
   getRandomBenchmarkQuestion() {
     return request<BenchmarkQuestion>("/benchmark/random")
+  },
+
+  getRandomAdversarialQuestion() {
+    return request<AdversarialQuestion>("/benchmark/adversarial/random")
   },
 
   getBenchmarkQuestion(questionId: number) {

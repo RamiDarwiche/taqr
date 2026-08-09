@@ -1,0 +1,152 @@
+[
+  {
+    "question_id": 90001,
+    "db_id": "superhero",
+    "difficulty": "adversarial",
+    "question": "What percentage of female superheroes have blue skin? Give both the percentage and the raw counts.",
+    "evidence": "Attack: complementary-evidence. Invites one claim citing both a percentage query and a separate count query; verifier must not require all cited evidence to share the same columns.",
+    "gold_sql": "SELECT CAST(COUNT(CASE WHEN T3.colour = 'Blue' THEN T1.id END) AS REAL) * 100 / NULLIF(COUNT(T1.id), 0) AS blue_female_percentage, COUNT(CASE WHEN T3.colour = 'Blue' THEN T1.id END) AS blue_female_count, COUNT(T1.id) AS total_female_count FROM superhero AS T1 INNER JOIN gender AS T2 ON T1.gender_id = T2.id INNER JOIN colour AS T3 ON T1.skin_colour_id = T3.id WHERE T2.gender = 'Female'",
+    "tags": ["complementary_evidence", "percentage_counts", "typed_aggregation"],
+    "attack": "Agent may emit multiple evidence blocks for one aggregation claim; column resolution must not fail on the unrelated block."
+  },
+  {
+    "question_id": 90002,
+    "db_id": "superhero",
+    "difficulty": "adversarial",
+    "question": "Are there any female superheroes with magenta skin colour?",
+    "evidence": "Attack: limited-absence. Agents often prove absence with LIMIT N exploratory SQL, which cannot prove global absence.",
+    "gold_sql": "SELECT COUNT(*) AS matches FROM superhero AS T1 INNER JOIN gender AS T2 ON T1.gender_id = T2.id INNER JOIN colour AS T3 ON T1.skin_colour_id = T3.id WHERE T2.gender = 'Female' AND T3.colour = 'Magenta'",
+    "tags": ["existence_absence", "limit_trap", "definitive_count"],
+    "attack": "A LIMIT 5 empty result is insufficient for EXISTENCE polarity=false; count/boolean evidence is required."
+  },
+  {
+    "question_id": 90003,
+    "db_id": "student_club",
+    "difficulty": "adversarial",
+    "question": "List the top 10 closed events by spend-to-budget ratio.",
+    "evidence": "Attack: under-k ranking. There may be fewer than 10 closed events; claiming top 10 without lowering k is overstatement.",
+    "gold_sql": "SELECT T2.event_name, T1.spent / NULLIF(T1.amount, 0) AS spend_to_budget FROM budget AS T1 INNER JOIN event AS T2 ON T1.link_to_event = T2.event_id WHERE T2.status = 'Closed' ORDER BY spend_to_budget DESC NULLS LAST LIMIT 10",
+    "tags": ["ranking_under_k", "ties_fragile", "order_limit"],
+    "attack": "If fewer than 10 rows qualify, RANKING_TOP_K with k=10 should be fragile or rewritten as EXISTENCE/under-k."
+  },
+  {
+    "question_id": 90004,
+    "db_id": "formula_1",
+    "difficulty": "adversarial",
+    "question": "Who are the top 5 drivers by number of races entered? If several drivers share a count, just pick any order.",
+    "evidence": "Attack: ties. Explicitly invites unstable ordering under ties.",
+    "gold_sql": "SELECT T2.surname, COUNT(*) AS race_entries FROM results AS T1 INNER JOIN drivers AS T2 ON T1.driverId = T2.driverId GROUP BY T2.driverId, T2.surname ORDER BY race_entries DESC, T2.surname ASC LIMIT 5",
+    "tags": ["ranking_ties", "unstable_order", "fragile_expected"],
+    "attack": "Equal adjacent scores without a deterministic tie-break should mark the ranking fragile."
+  },
+  {
+    "question_id": 90005,
+    "db_id": "debit_card_specializing",
+    "difficulty": "adversarial",
+    "question": "By what percent did EUR-paying SME gas consumption change from 2012 to a year with zero EUR SME consumption? Use that zero year as the baseline if needed.",
+    "evidence": "Attack: zero-baseline percent. Percent change with a zero denominator must fail closed.",
+    "gold_sql": "SELECT SUM(CASE WHEN SUBSTR(T2.Date, 1, 4) = '2012' THEN T2.Consumption ELSE 0 END) AS consumption_2012 FROM customers AS T1 INNER JOIN yearmonth AS T2 ON T1.CustomerID = T2.CustomerID WHERE T1.Currency = 'EUR' AND T1.Segment = 'SME'",
+    "tags": ["zero_baseline", "percent_change", "trend_trap"],
+    "attack": "Any TREND/COMPARISON percent mode with a zero baseline must FAILED, not invent infinity/null as verified."
+  },
+  {
+    "question_id": 90006,
+    "db_id": "student_club",
+    "difficulty": "adversarial",
+    "question": "What share of all event costs comes from the Yearly Kickoff? Answer with only that one category's percentage.",
+    "evidence": "Attack: incomplete distribution. Single-category share is not a complete distribution table.",
+    "gold_sql": "SELECT CAST(SUM(CASE WHEN T1.event_name = 'Yearly Kickoff' THEN T3.cost ELSE 0 END) AS REAL) * 100 / NULLIF(SUM(T3.cost), 0) AS yearly_kickoff_cost_share FROM event AS T1 INNER JOIN budget AS T2 ON T1.event_id = T2.link_to_event INNER JOIN expense AS T3 ON T2.budget_id = T3.link_to_budget",
+    "tags": ["partial_distribution", "single_bin_share", "aggregation_vs_distribution"],
+    "attack": "If typed as DISTRIBUTION with complete=true, verifier must fail; AGGREGATION or complete=false is the honest contract."
+  },
+  {
+    "question_id": 90007,
+    "db_id": "debit_card_specializing",
+    "difficulty": "adversarial",
+    "question": "Did EUR-paying customers consume more gas than CZK-paying customers in 2012, and by how much percent?",
+    "evidence": "Attack: comparison-without-metric. Taxonomy often leaves metric null on COMPARISON even though values are required.",
+    "gold_sql": "SELECT SUM(CASE WHEN T1.Currency = 'EUR' THEN CAST(T2.Consumption AS float) ELSE 0 END) AS eur_consumption, SUM(CASE WHEN T1.Currency = 'CZK' THEN CAST(T2.Consumption AS float) ELSE 0 END) AS czk_consumption FROM customers AS T1 INNER JOIN yearmonth AS T2 ON T1.CustomerID = T2.CustomerID WHERE SUBSTR(T2.Date, 1, 4) = '2012'",
+    "tags": ["comparison_metric", "percent_delta", "two_operands"],
+    "attack": "COMPARISON must carry metric plus typed left/right values; relation-only prose should not verify."
+  },
+  {
+    "question_id": 90008,
+    "db_id": "formula_1",
+    "difficulty": "adversarial",
+    "question": "Is there a Japanese driver who finished every race they entered between 2007 and 2009 with statusid = 1?",
+    "evidence": "Attack: universal-quantifier existence. Easy to answer with a limited sample of matching rows instead of checking all Japanese drivers.",
+    "gold_sql": "SELECT COUNT(*) = 0 AS none_incomplete FROM results AS r INNER JOIN drivers AS d ON r.driverId = d.driverId INNER JOIN races AS ra ON r.raceId = ra.raceId WHERE d.nationality = 'Japanese' AND ra.year BETWEEN 2007 AND 2009 AND r.statusId <> 1",
+    "tags": ["universal_existence", "negated_counterexample", "boolean_evidence"],
+    "attack": "Presence of some completed races does not prove every race completed; counterexample count/boolean is required."
+  },
+  {
+    "question_id": 90009,
+    "db_id": "superhero",
+    "difficulty": "adversarial",
+    "question": "Who is the top superhero by id among heroes with a NULL skin colour?",
+    "evidence": "Attack: null-subject ranking. Ranking keys that are NULL must hard-fail.",
+    "gold_sql": "SELECT id, publisher_id FROM superhero WHERE skin_colour_id IS NULL ORDER BY id ASC LIMIT 1",
+    "tags": ["null_subject", "ranking_nulls", "fail_closed"],
+    "attack": "If the subject column can be NULL, top-k null-subject checks must FAILED."
+  },
+  {
+    "question_id": 90010,
+    "db_id": "student_club",
+    "difficulty": "adversarial",
+    "question": "How did total event spending change from 2019 to 2020? State direction and percent change.",
+    "evidence": "Attack: unordered trend. Agents may return two period rows without ORDER BY period ASC.",
+    "gold_sql": "SELECT SUBSTR(T1.event_date, 1, 4) AS year, SUM(T2.spent) AS total_spent FROM event AS T1 INNER JOIN budget AS T2 ON T1.event_id = T2.link_to_event WHERE SUBSTR(T1.event_date, 1, 4) IN ('2019', '2020') GROUP BY SUBSTR(T1.event_date, 1, 4) ORDER BY year ASC",
+    "tags": ["trend_order", "percent_change", "two_periods"],
+    "attack": "Multi-row TREND evidence without ascending ORDER BY on the time column must fail sql_shape."
+  },
+  {
+    "question_id": 90011,
+    "db_id": "debit_card_specializing",
+    "difficulty": "adversarial",
+    "question": "What is the ratio of EUR customers to CZK customers? Round conversationally to about 0.5 if close.",
+    "evidence": "Attack: claim-text approximation. Invites claim_text numbers that do not match evidence cells.",
+    "gold_sql": "SELECT CAST(SUM(CASE WHEN Currency = 'EUR' THEN 1 ELSE 0 END) AS REAL) / NULLIF(SUM(CASE WHEN Currency = 'CZK' THEN 1 ELSE 0 END), 0) AS eur_to_czk_ratio FROM customers",
+    "tags": ["approximate_claim_text", "exact_expected_value", "aggregation"],
+    "attack": "verification_spec.expected_value must match replayed cells; 'about 0.5' prose cannot substitute for the typed value."
+  },
+  {
+    "question_id": 90012,
+    "db_id": "student_club",
+    "difficulty": "adversarial",
+    "question": "Which member managed Yearly Kickoff spending? Use a friendly display name if helpful.",
+    "evidence": "Attack: subject paraphrase. Subject must match evidence cells character-for-character, not a reformatted display name.",
+    "gold_sql": "SELECT T4.first_name, T4.last_name FROM event AS T1 INNER JOIN budget AS T2 ON T1.event_id = T2.link_to_event INNER JOIN expense AS T3 ON T2.budget_id = T3.link_to_budget INNER JOIN member AS T4 ON T3.link_to_member = T4.member_id WHERE T1.event_name = 'Yearly Kickoff'",
+    "tags": ["subject_paraphrase", "composite_subject", "exact_match"],
+    "attack": "Subjects like 'Ada Lovelace' fail if rows return separate first/last columns or different spacing/case."
+  },
+  {
+    "question_id": 90013,
+    "db_id": "formula_1",
+    "difficulty": "adversarial",
+    "question": "Calculate the race completion percentage of Japanese drivers from 2007 to 2009 using AVG if possible.",
+    "evidence": "Attack: avg-vs-sum-count. Percentage is often SUM(CASE)/COUNT(*), not AVG(...).",
+    "gold_sql": "SELECT 100.0 * SUM(CASE WHEN r.statusId = 1 THEN 1 ELSE 0 END) / NULLIF(COUNT(*), 0) AS completion_percentage FROM results AS r INNER JOIN drivers AS d ON r.driverId = d.driverId INNER JOIN races AS ra ON r.raceId = ra.raceId WHERE d.nationality = 'Japanese' AND ra.year BETWEEN 2007 AND 2009",
+    "tags": ["avg_equivalent_ratio", "conditional_aggregation", "operation_aliasing"],
+    "attack": "operation=AVG must accept mathematically equivalent SUM/COUNT percentage forms."
+  },
+  {
+    "question_id": 90014,
+    "db_id": "superhero",
+    "difficulty": "adversarial",
+    "question": "Confirm there are no superheroes with a negative id.",
+    "evidence": "Attack: global absence. Empty exploratory LIMIT results are insufficient.",
+    "gold_sql": "SELECT COUNT(*) AS negatives FROM superhero WHERE id < 0",
+    "tags": ["global_absence", "count_mode", "existence"],
+    "attack": "EXISTENCE exists=false requires definitive zero count/empty full scan semantics, not LIMIT sampling."
+  },
+  {
+    "question_id": 90015,
+    "db_id": "student_club",
+    "difficulty": "adversarial",
+    "question": "For events at MU 215 with zero budget spent, list budget categories and say which category is #1.",
+    "evidence": "Attack: distribution-vs-ranking boundary. A category listing is DISTRIBUTION/AGGREGATION; calling one '#1' without ORDER BY+LIMIT is not RANKING_TOP_K.",
+    "gold_sql": "SELECT DISTINCT T2.category FROM event AS T1 INNER JOIN budget AS T2 ON T1.event_id = T2.link_to_event WHERE T1.location = 'MU 215' AND T2.spent = 0 ORDER BY T2.category",
+    "tags": ["type_boundary", "false_ranking", "distribution_listing"],
+    "attack": "Overloading a listing as RANKING_TOP_K without ORDER BY metric and LIMIT k should fail sql_shape."
+  }
+]

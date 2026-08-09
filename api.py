@@ -16,6 +16,11 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import Engine, inspect, text
 
+from benchmark.adversarial import (
+    get_adversarial_question,
+    get_adversarial_question_by_text,
+    random_adversarial_question,
+)
 from benchmark.bird import (
     BirdQuestion,
     ensure_bird_dataset,
@@ -152,9 +157,13 @@ def _resolve_benchmark(
 ) -> dict[str, object] | None:
     item: BirdQuestion | None = None
     if question_id is not None:
-        item = get_question(question_id)
+        adversarial = get_adversarial_question(question_id)
+        item = adversarial.question if adversarial else get_question(question_id)
     if item is None and question:
-        item = get_question_by_text(question)
+        adversarial = get_adversarial_question_by_text(question)
+        item = (
+            adversarial.question if adversarial else get_question_by_text(question)
+        )
     return _benchmark_payload(item) if item else None
 
 
@@ -441,8 +450,16 @@ def create_app(
         item = random_question()
         return JSONResponse(content=_json_safe(item.as_api_dict()))
 
+    @app.get("/api/benchmark/adversarial/random")
+    def get_random_adversarial_question() -> JSONResponse:
+        item = random_adversarial_question()
+        return JSONResponse(content=_json_safe(item.as_api_dict()))
+
     @app.get("/api/benchmark/questions/{question_id}")
     def get_benchmark_question(question_id: int) -> JSONResponse:
+        adversarial = get_adversarial_question(question_id)
+        if adversarial is not None:
+            return JSONResponse(content=_json_safe(adversarial.as_api_dict()))
         item = get_question(question_id)
         if item is None:
             raise HTTPException(status_code=404, detail="Question not found")
