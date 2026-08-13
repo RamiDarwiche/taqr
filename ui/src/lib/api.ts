@@ -97,6 +97,7 @@ export interface Verification {
 
 export interface ToolCall {
   id: string
+  agent?: string | null
   tool_name: string | null
   tool_call_id: string
   parameters: Record<string, unknown>

@@ -10,7 +10,7 @@ from typing import Any, Literal
 
 from sqlalchemy import Engine
 
-from planner.schemas import Claim, Evidence
+from planner.types import Claim, Evidence
 from verifier.base import (
     fail,
     finalize_claim,

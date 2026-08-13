@@ -7,7 +7,7 @@ from typing import Any
 
 from sqlglot import exp, parse
 
-from planner.schemas import Evidence
+from planner.types import Evidence
 
 NUMERIC_TOLERANCE = Decimal("0.000001")
 

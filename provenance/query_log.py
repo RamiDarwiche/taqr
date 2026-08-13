@@ -9,7 +9,7 @@ from uuid import UUID
 from sqlalchemy import inspect, text
 from sqlalchemy.engine import Engine
 
-from domain_types import EventType, RunStatus
+from types.common import EventType, RunStatus
 from provenance.ddl import (
     _EVENTS_TABLE__DDL,
     _MODELS_TABLE__DDL,
@@ -260,8 +260,10 @@ class QueryLog:
         status: str = "ok",
         duration_ms: float | None = None,
         error: str | None = None,
+        agent: str | None = None,
     ) -> None:
         payload: dict[str, Any] = {
+            "agent": agent,
             "tool_name": tool_name,
             "tool_call_id": tool_call_id,
             "parameters": parameters or {},

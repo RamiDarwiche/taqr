@@ -10,11 +10,16 @@ from provenance.query_log import QueryLog
 
 
 class ProvenanceToolCallback(BaseCallbackHandler):
-    """Logs LangChain tool calls into the append-only provenance store."""
+    """Logs LangChain tool calls into the append-only provenance store.
 
-    def __init__(self, query_log: QueryLog, run_id: str) -> None:
+    ``agent`` tags each TOOL_CALL event so planner, judge, and later agents
+    can share this callback without mixing their traces.
+    """
+
+    def __init__(self, query_log: QueryLog, run_id: str, *, agent: str) -> None:
         self.query_log = query_log
         self.run_id = run_id
+        self.agent = agent
         self._started_at: dict[str, float] = {}
         self._tool_name: dict[str, str | None] = {}
         self._inputs: dict[str, dict[str, Any] | None] = {}
@@ -44,6 +49,7 @@ class ProvenanceToolCallback(BaseCallbackHandler):
         duration_ms = self._duration_ms(key)
         self.query_log.log_tool_call(
             self.run_id,
+            agent=self.agent,
             tool_name=self._tool_name.pop(key, kwargs.get("name")),
             tool_call_id=key,
             parameters=self._inputs.pop(key, None),
@@ -63,6 +69,7 @@ class ProvenanceToolCallback(BaseCallbackHandler):
         duration_ms = self._duration_ms(key)
         self.query_log.log_tool_call(
             self.run_id,
+            agent=self.agent,
             tool_name=self._tool_name.pop(key, kwargs.get("name")),
             tool_call_id=key,
             parameters=self._inputs.pop(key, None),

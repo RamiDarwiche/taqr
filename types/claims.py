@@ -1,12 +1,36 @@
 from __future__ import annotations
 
 import uuid
-from decimal import Decimal
 from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, Field, model_validator
 
-from domain_types import ClaimType
+from types.common import ClaimType
+from types.common import Numeric
+
+
+class Claim(BaseModel):
+    id: uuid.UUID = Field(default_factory=uuid.uuid4)
+    claim_text: str
+    claim_type: ClaimType
+    subject: str | list[str] | None = None
+    metric: str | None = None
+    k: int | None = None
+    filters: dict[str, Any] = Field(default_factory=dict)
+    evidence_ids: list[str]
+    verification_spec: VerificationSpec | None = None
+
+    @model_validator(mode="after")
+    def validate_verification_spec_kind(self) -> Claim:
+        if (
+            self.verification_spec is not None
+            and self.verification_spec.kind != self.claim_type.value
+        ):
+            raise ValueError(
+                "verification_spec.kind must match claim_type "
+                f"({self.verification_spec.kind!r} != {self.claim_type.value!r})"
+            )
+        return self
 
 
 class Evidence(BaseModel):
@@ -17,9 +41,6 @@ class Evidence(BaseModel):
     columns: list[str]
     # null from the model; provenance fills a hex digest after the run
     result_fingerprint: str | None = None
-
-
-Numeric = int | float | Decimal
 
 
 class AggregationSpec(BaseModel):
@@ -67,7 +88,9 @@ class TrendSpec(BaseModel):
     @model_validator(mode="after")
     def validate_change(self) -> TrendSpec:
         if (self.change_mode is None) != (self.expected_change is None):
-            raise ValueError("change_mode and expected_change must be provided together")
+            raise ValueError(
+                "change_mode and expected_change must be provided together"
+            )
         if self.start_period == self.end_period:
             raise ValueError("start_period and end_period must differ")
         return self
@@ -91,52 +114,6 @@ class DistributionSpec(BaseModel):
 
 
 VerificationSpec = Annotated[
-    AggregationSpec
-    | ComparisonSpec
-    | TrendSpec
-    | ExistenceSpec
-    | DistributionSpec,
+    AggregationSpec | ComparisonSpec | TrendSpec | ExistenceSpec | DistributionSpec,
     Field(discriminator="kind"),
 ]
-
-
-class Claim(BaseModel):
-    id: uuid.UUID = Field(default_factory=uuid.uuid4)
-    claim_text: str
-    claim_type: ClaimType
-    subject: str | list[str] | None = None
-    metric: str | None = None
-    k: int | None = None
-    filters: dict[str, Any] = Field(default_factory=dict)
-    evidence_ids: list[str]
-    verification_spec: VerificationSpec | None = None
-
-    @model_validator(mode="after")
-    def validate_verification_spec_kind(self) -> Claim:
-        if (
-            self.verification_spec is not None
-            and self.verification_spec.kind != self.claim_type.value
-        ):
-            raise ValueError(
-                "verification_spec.kind must match claim_type "
-                f"({self.verification_spec.kind!r} != {self.claim_type.value!r})"
-            )
-        return self
-
-
-class PlanAgentOutput(BaseModel):
-    """Mode A final output: machine-verifiable claims + supporting evidence."""
-
-    claims: list[Claim]
-    evidence: list[Evidence]
-
-
-class QueryResponsePayload(BaseModel):
-    """Provenance event payload for a completed plan-agent answer.
-
-    Keep ``response`` as a nested object (not a JSON string) so Postgres JSONB
-    stores structured claims/evidence.
-    """
-
-    query: str
-    response: PlanAgentOutput

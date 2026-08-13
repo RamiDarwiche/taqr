@@ -8,13 +8,13 @@ from uuid import NAMESPACE_OID, uuid5
 
 from langgraph.graph import END, START, MessagesState, StateGraph
 
+from common.callbacks import ProvenanceToolCallback
 from db import DB
-from domain_types import ClaimType, EventType, RunStatus
+from types.common import ClaimType, EventType, RunStatus
 from logger import logger
-from planner.callbacks import ProvenanceToolCallback
 from planner.nodes import emit_claims, make_planner_nodes, model_name, should_continue
 from planner.progress import pretty_step
-from planner.schemas import (
+from planner.types import (
     Claim,
     Evidence,
     PlanAgentOutput,
@@ -93,7 +93,9 @@ class PlanAgent:
         """Yield ``(\"step\", event)`` updates, then ``(\"plan\", PlanAgentOutput)``."""
         model_id = str(uuid5(NAMESPACE_OID, model_name))
         start_ts = datetime.now(UTC)
-        logging_callback = ProvenanceToolCallback(self.query_log, run_id)
+        logging_callback = ProvenanceToolCallback(
+            self.query_log, run_id, agent="planner"
+        )
         self.query_log.log_run(
             session_id=session_id,
             run_id=run_id,

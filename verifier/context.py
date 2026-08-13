@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from sqlalchemy import Engine, text
 from sqlglot import exp
 
-from planner.schemas import Evidence
+from planner.types import Evidence
 from verifier.sql_analysis import parse_read_only_query
 
 

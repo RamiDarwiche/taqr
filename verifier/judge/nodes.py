@@ -13,8 +13,6 @@ from langgraph.prebuilt import ToolNode
 from sqlalchemy.engine import Engine
 
 from common.tools import SqlTools, make_sql_tools
-from planner.llm import model
-from planner.types import PlanAgentOutput
 
 model_name = getattr(model, "model_name", None) or getattr(model, "model", None)
 
@@ -23,26 +21,11 @@ SKIP_SCHEMA_TABLES = frozenset({"provenance"})
 MAX_SQL_ATTEMPTS = 5
 
 # Queries should be programatically enforce top_k rather than relying on the system prompt
-planner_system_prompt = (
-    open("planner/system_prompts/PLANNER_NEW.md").read().replace("{top_k}", "5")
-)
-
-_QUERY_NUDGE = (
-    "You must call sql_db_query now with a single PostgreSQL SELECT that answers "
-    "the user's question using the schema already provided. Do not reply in prose."
-)
-
-_EMIT_CLAIMS_PROMPT = (
-    "Using only successful sql_db_query tool results already in this conversation, "
-    "emit claims and evidence. Copy sql and rows verbatim from tool output — "
-    "never invent or round values. Derive columns from SELECT aliases. "
-    "Set result_fingerprint to null. Every evidence_ids entry must match an "
-    "evidence.id you include."
-)
+judge_system_prompt = open("verifier/judge/system_prompts/JUDGE.md").read()
 
 
 @dataclass(frozen=True)
-class PlannerNodes:
+class JudgeNodes:
     """Graph nodes bound to the PlanAgent's database engine."""
 
     tools: SqlTools

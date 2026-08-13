@@ -1,8 +1,10 @@
-"""Shared domain enums"""
-
 from __future__ import annotations
 
+from decimal import Decimal
+from typing import Union
 from enum import Enum
+
+Numeric = Union[int, float, Decimal]
 
 
 class ClaimType(str, Enum):

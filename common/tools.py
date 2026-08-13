@@ -95,8 +95,8 @@ def make_sql_tools(engine: Engine) -> SqlTools:
             with engine.connect() as conn:
                 result = conn.execute(text(query))
                 rows = [list(row) for row in result.fetchall()]
-            # JSON with canonical numbers (not Decimal reprs) so the planner
-            # copies types that fingerprint_rows can match on SQL replay.
+            # JSON with canonical numbers (not Decimal reprs) so agents
+            # copy types that fingerprint_rows can match on SQL replay.
             return json.dumps(
                 _canonicalize_value(rows),
                 ensure_ascii=True,

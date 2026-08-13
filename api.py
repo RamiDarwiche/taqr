@@ -29,7 +29,7 @@ from benchmark.bird import (
     random_question,
 )
 from db import DB
-from domain_types import EventType
+from types.common import EventType
 from provenance.query_log import QueryLog
 
 ALLOWED_SCHEMAS = frozenset({"public", "provenance"})
@@ -161,9 +161,7 @@ def _resolve_benchmark(
         item = adversarial.question if adversarial else get_question(question_id)
     if item is None and question:
         adversarial = get_adversarial_question_by_text(question)
-        item = (
-            adversarial.question if adversarial else get_question_by_text(question)
-        )
+        item = adversarial.question if adversarial else get_question_by_text(question)
     return _benchmark_payload(item) if item else None
 
 
@@ -210,7 +208,9 @@ def _normalize_run_summary(summary: dict[str, Any]) -> dict[str, Any]:
 
 
 def _sse(event: str, data: dict[str, Any]) -> str:
-    return f"event: {event}\ndata: {json.dumps(_json_safe(data), ensure_ascii=False)}\n\n"
+    return (
+        f"event: {event}\ndata: {json.dumps(_json_safe(data), ensure_ascii=False)}\n\n"
+    )
 
 
 def _wants_event_stream(request: Request, stream: bool) -> bool:
@@ -517,8 +517,7 @@ def create_app(
             elif table == "runs":
                 order_by = " ORDER BY start_ts DESC"
         exec_text = (
-            f"SELECT * FROM {qualified_name}{order_by} "
-            "LIMIT :limit OFFSET :offset"
+            f"SELECT * FROM {qualified_name}{order_by} " "LIMIT :limit OFFSET :offset"
         )
         with engine.connect() as conn:
             rows = conn.execute(

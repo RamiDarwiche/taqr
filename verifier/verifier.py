@@ -16,9 +16,9 @@ from collections.abc import Callable
 
 from sqlalchemy import Engine
 
-from domain_types import ClaimType, VerificationStatus
+from types.common import ClaimType, VerificationStatus
 from logger import logger
-from planner.schemas import Claim, Evidence, PlanAgentOutput
+from planner.types import Claim, Evidence, PlanAgentOutput
 from provenance import QueryLog
 from provenance.utils import fingerprint_rows
 from verifier import (
@@ -57,7 +57,10 @@ def _gate_status(claim_results: list[ClaimVerification]) -> VerificationStatus:
     if statuses == {VerificationStatus.VERIFIED}:
         return VerificationStatus.VERIFIED
     if VerificationStatus.FAILED in statuses:
-        if VerificationStatus.VERIFIED in statuses or VerificationStatus.PARTIALLY_VERIFIED in statuses:
+        if (
+            VerificationStatus.VERIFIED in statuses
+            or VerificationStatus.PARTIALLY_VERIFIED in statuses
+        ):
             return VerificationStatus.PARTIALLY_VERIFIED
         return VerificationStatus.FAILED
     if (
@@ -125,7 +128,9 @@ def verify_response(
         )
 
     verified = verify_evidence_refs(claims, evidence, verified)
-    referenced_ids = {evidence_id for claim in claims for evidence_id in claim.evidence_ids}
+    referenced_ids = {
+        evidence_id for claim in claims for evidence_id in claim.evidence_ids
+    }
     context = build_context(evidence, engine, referenced_ids=referenced_ids)
 
     logger.info(f"Verifying {len(claims)} claims")
@@ -201,9 +206,7 @@ def verify_evidence_refs(
             fail(
                 result,
                 check="evidence_refs",
-                reason=(
-                    f"claim {claim.id} references unknown evidence ids: {missing}"
-                ),
+                reason=(f"claim {claim.id} references unknown evidence ids: {missing}"),
             )
             continue
 
@@ -331,8 +334,7 @@ def verify_metrics_and_filters(
             metric = claim.metric.casefold()
             if not any(
                 metric in {alias.casefold() for alias in selected_aliases(replay.query)}
-                or metric
-                in {column.casefold() for column in replay.evidence.columns}
+                or metric in {column.casefold() for column in replay.evidence.columns}
                 for replay in referenced
             ):
                 fail(

@@ -4,8 +4,8 @@ import uuid
 
 from pydantic import BaseModel, Field
 
-from domain_types import VerificationStatus
-from planner.schemas import PlanAgentOutput
+from types.common import VerificationStatus
+from planner.types import PlanAgentOutput
 
 
 class ClaimVerification(BaseModel):
