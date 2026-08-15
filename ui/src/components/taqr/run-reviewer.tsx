@@ -10,6 +10,12 @@ import {
   XCircleIcon,
 } from "@phosphor-icons/react"
 
+import {
+  Accordion,
+  AccordionContent,
+  AccordionItem,
+  AccordionTrigger,
+} from "@/components/ui/accordion"
 import { Badge } from "@/components/ui/badge"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Separator } from "@/components/ui/separator"
@@ -37,6 +43,7 @@ import type {
   RunDetail,
   ToolCall,
 } from "@/lib/api"
+import { cn } from "@/lib/utils"
 
 /** Human-readable explanations for verifier check ids shown in the UI. */
 const CHECK_TOOLTIPS: Record<string, string> = {
@@ -113,6 +120,8 @@ const CHECK_TOOLTIPS: Record<string, string> = {
   distribution_coverage:
     "The contract intentionally covers only part of a distribution.",
 }
+
+const PREVIEW_ROW_LIMIT = 8
 
 interface RunReviewerProps {
   run?: RunDetail
@@ -195,46 +204,26 @@ export function RunReviewer({ run, isLoading, error }: RunReviewerProps) {
               )}
             </div>
           )}
-          {run.claims.length > 0 && (
-            <ol className="flex max-w-3xl list-decimal flex-col gap-2 pl-5 text-base leading-7 text-muted-foreground">
-              {run.claims.map((claim) => (
-                <li key={claim.id}>{claim.claim_text}</li>
-              ))}
-            </ol>
-          )}
+          <p className="text-xs text-muted-foreground">
+            {run.claims.length} {run.claims.length === 1 ? "claim" : "claims"}
+            {" · "}
+            {run.evidence.length} evidence{" "}
+            {run.evidence.length === 1 ? "set" : "sets"}
+            {" · "}
+            {run.tool_calls.length} tool{" "}
+            {run.tool_calls.length === 1 ? "call" : "calls"}
+          </p>
         </header>
 
         <JudgeReview run={run} status={judgeStatus} />
 
-        <Separator className="my-8 md:my-10" />
-
-        {run.gold_sql && (
-          <section aria-labelledby="gold-heading" className="mb-10">
-            <div className="mb-4 flex items-end justify-between gap-4">
-              <div>
-                <p className="text-caption font-semibold tracking-[0.18em] text-muted-foreground uppercase">
-                  Benchmark reference
-                </p>
-                <h2
-                  id="gold-heading"
-                  className="mt-1 font-heading text-xl font-medium"
-                >
-                  Gold standard SQL
-                </h2>
-              </div>
-              {run.gold_result && !run.gold_result.error && (
-                <Badge variant="outline">
-                  {run.gold_result.row_count}{" "}
-                  {run.gold_result.row_count === 1 ? "row" : "rows"}
-                </Badge>
-              )}
-            </div>
-            <pre className="overflow-x-auto border bg-muted px-4 py-3 font-mono text-caption leading-5 text-foreground">
-              <code>{format(run.gold_sql, { language: "postgresql" })}</code>
-            </pre>
-            <GoldResultView result={run.gold_result} />
-          </section>
+        {run.error && (
+          <div className="mt-7 border border-destructive/40 p-4 text-sm text-destructive">
+            {run.error}
+          </div>
         )}
+
+        <Separator className="my-8 md:my-10" />
 
         <section aria-labelledby="review-heading">
           <div className="mb-5 flex items-end justify-between gap-4">
@@ -278,13 +267,11 @@ export function RunReviewer({ run, isLoading, error }: RunReviewerProps) {
           </div>
         </section>
 
-        <ToolTimeline calls={run.tool_calls} />
-
-        {run.error && (
-          <div className="mt-8 border border-destructive/40 p-4 text-sm text-destructive">
-            {run.error}
-          </div>
-        )}
+        <SupportingDetails
+          goldSql={run.gold_sql}
+          goldResult={run.gold_result}
+          calls={run.tool_calls}
+        />
       </main>
     </ScrollArea>
   )
@@ -344,55 +331,57 @@ function JudgeReview({ run, status }: { run: RunDetail; status: JudgeStatus }) {
         </Badge>
       </div>
 
-      <details>
-        <summary className="cursor-pointer border-t px-4 py-3 text-xs font-medium text-primary hover:underline">
-          View judge report
-        </summary>
-        <div className="flex flex-col gap-5 border-t px-4 py-4">
-          <div>
-            <p className="text-stat font-semibold tracking-[0.14em] text-muted-foreground uppercase">
-              Reasoning
-            </p>
-            <p className="mt-2 text-sm leading-6">{report.reasoning}</p>
-          </div>
-
-          {report.claim_assessments.length > 0 && (
+      <Accordion>
+        <AccordionItem value="judge-report" className="border-t">
+          <AccordionTrigger className="px-4 py-3 text-primary">
+            View judge report
+          </AccordionTrigger>
+          <AccordionContent className="flex flex-col gap-5 border-t px-4 py-4">
             <div>
               <p className="text-stat font-semibold tracking-[0.14em] text-muted-foreground uppercase">
-                Claim assessments
+                Reasoning
               </p>
-              <ul className="mt-2 flex flex-col divide-y border">
-                {report.claim_assessments.map((assessment) => (
-                  <li
-                    key={assessment.claim_id}
-                    className="flex items-start gap-3 px-3 py-3"
-                  >
-                    {assessment.supported ? (
-                      <CheckCircleIcon
-                        className="mt-0.5 size-4 shrink-0 text-primary"
-                        weight="fill"
-                      />
-                    ) : (
-                      <XCircleIcon className="mt-0.5 size-4 shrink-0 text-destructive" />
-                    )}
-                    <div className="min-w-0">
-                      <p className="text-xs leading-5 font-medium">
-                        {claimsById.get(assessment.claim_id)?.claim_text ??
-                          assessment.claim_id}
-                      </p>
-                      {assessment.notes && (
-                        <p className="mt-1 text-caption leading-5 text-muted-foreground">
-                          {assessment.notes}
-                        </p>
-                      )}
-                    </div>
-                  </li>
-                ))}
-              </ul>
+              <p className="mt-2 text-sm leading-6">{report.reasoning}</p>
             </div>
-          )}
-        </div>
-      </details>
+
+            {report.claim_assessments.length > 0 && (
+              <div>
+                <p className="text-stat font-semibold tracking-[0.14em] text-muted-foreground uppercase">
+                  Claim assessments
+                </p>
+                <ul className="mt-2 flex flex-col divide-y border">
+                  {report.claim_assessments.map((assessment) => (
+                    <li
+                      key={assessment.claim_id}
+                      className="flex items-start gap-3 px-3 py-3"
+                    >
+                      {assessment.supported ? (
+                        <CheckCircleIcon
+                          className="mt-0.5 size-4 shrink-0 text-primary"
+                          weight="fill"
+                        />
+                      ) : (
+                        <XCircleIcon className="mt-0.5 size-4 shrink-0 text-destructive" />
+                      )}
+                      <div className="min-w-0">
+                        <p className="text-xs leading-5 font-medium">
+                          {claimsById.get(assessment.claim_id)?.claim_text ??
+                            assessment.claim_id}
+                        </p>
+                        {assessment.notes && (
+                          <p className="mt-1 text-caption leading-5 text-muted-foreground">
+                            {assessment.notes}
+                          </p>
+                        )}
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </AccordionContent>
+        </AccordionItem>
+      </Accordion>
     </section>
   )
 }
@@ -429,12 +418,17 @@ function ClaimReview({
 }) {
   return (
     <article className="border-b last:border-b-0">
-      <div className="flex gap-4 px-5 py-5 md:px-7">
+      <div className="flex gap-4 px-5 py-5 md:px-7 items-baseline">
         <span className="font-mono text-xs text-muted-foreground">
           {String(index + 1).padStart(2, "0")}
         </span>
         <div className="min-w-0 flex-1">
-          <p className="text-sm leading-6 font-medium">{claim.claim_text}</p>
+          <div className="flex items-start justify-between gap-3">
+            <p className="text-sm leading-6 font-medium">{claim.claim_text}</p>
+            {verification && (
+              <VerificationBadge status={verification.status} compact />
+            )}
+          </div>
           <Tabs defaultValue="claim" className="mt-4">
             <TabsList
               variant="line"
@@ -611,50 +605,66 @@ function GoldResultView({ result }: { result?: GoldResult | null }) {
     )
   }
 
+  const previewRows = result.rows.slice(0, PREVIEW_ROW_LIMIT)
+  const totalRows = Math.max(result.row_count, result.rows.length)
+
   return (
-    <div className="mt-3 overflow-x-auto border">
-      <Table>
-        <TableHeader>
-          <TableRow>
-            {result.columns.map((column) => (
-              <TableHead key={column} className="h-8 font-mono text-stat">
-                {column}
-              </TableHead>
-            ))}
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {result.rows.length === 0 ? (
+    <div className="mt-3 bg-muted/30">
+      <div className="overflow-x-auto">
+        <Table>
+          <TableHeader>
             <TableRow>
-              <TableCell
-                colSpan={result.columns.length}
-                className="h-12 text-center text-muted-foreground"
-              >
-                No rows returned
-              </TableCell>
+              {result.columns.map((column) => (
+                <TableHead key={column} className="h-8 font-mono text-stat">
+                  {column}
+                </TableHead>
+              ))}
             </TableRow>
-          ) : (
-            result.rows.map((row, rowIndex) => (
-              <TableRow key={rowIndex}>
-                {result.columns.map((column, columnIndex) => (
-                  <TableCell
-                    key={`${column}-${columnIndex}`}
-                    className="max-w-56 truncate font-mono text-stat"
-                    title={formatValue(row[columnIndex])}
-                  >
-                    {formatValue(row[columnIndex])}
-                  </TableCell>
-                ))}
+          </TableHeader>
+          <TableBody>
+            {previewRows.length === 0 ? (
+              <TableRow>
+                <TableCell
+                  colSpan={result.columns.length}
+                  className="h-12 text-center text-muted-foreground"
+                >
+                  No rows returned
+                </TableCell>
               </TableRow>
-            ))
-          )}
-        </TableBody>
-      </Table>
+            ) : (
+              previewRows.map((row, rowIndex) => (
+                <TableRow key={rowIndex}>
+                  {result.columns.map((column, columnIndex) => (
+                    <TableCell
+                      key={`${column}-${columnIndex}`}
+                      className="max-w-56 truncate font-mono text-stat"
+                      title={formatValue(row[columnIndex])}
+                    >
+                      {formatValue(row[columnIndex])}
+                    </TableCell>
+                  ))}
+                </TableRow>
+              ))
+            )}
+          </TableBody>
+        </Table>
+      </div>
+      {totalRows > previewRows.length && (
+        <>
+          <Separator />
+          <p className="px-3 py-2 text-caption text-muted-foreground">
+            Showing the first {previewRows.length} of {totalRows} rows.
+          </p>
+        </>
+      )}
     </div>
   )
 }
 
 function EvidenceView({ evidence }: { evidence: Evidence }) {
+  const previewRows = evidence.rows.slice(0, PREVIEW_ROW_LIMIT)
+  const totalRows = Math.max(evidence.row_count, evidence.rows.length)
+
   return (
     <div className="flex min-w-0 flex-col gap-3 border-l-2 border-primary/40 pl-3">
       <div className="flex flex-wrap items-center gap-2">
@@ -667,32 +677,42 @@ function EvidenceView({ evidence }: { evidence: Evidence }) {
       <pre className="overflow-x-auto bg-muted px-3 py-2 font-mono text-caption leading-5 text-foreground">
         <code>{format(evidence.sql, { language: "postgresql" })}</code>
       </pre>
-      <Table>
-        <TableHeader>
-          <TableRow>
-            {evidence.columns.map((column) => (
-              <TableHead key={column} className="h-8 font-mono text-stat">
-                {column}
-              </TableHead>
-            ))}
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {evidence.rows.map((row, rowIndex) => (
-            <TableRow key={rowIndex}>
-              {evidence.columns.map((column, columnIndex) => (
-                <TableCell
-                  key={`${column}-${columnIndex}`}
-                  className="max-w-56 truncate font-mono text-stat"
-                  title={formatValue(row[columnIndex])}
-                >
-                  {formatValue(row[columnIndex])}
-                </TableCell>
+      <div className="overflow-x-auto border">
+        <Table>
+          <TableHeader>
+            <TableRow>
+              {evidence.columns.map((column) => (
+                <TableHead key={column} className="h-8 font-mono text-stat">
+                  {column}
+                </TableHead>
               ))}
             </TableRow>
-          ))}
-        </TableBody>
-      </Table>
+          </TableHeader>
+          <TableBody>
+            {previewRows.map((row, rowIndex) => (
+              <TableRow key={rowIndex}>
+                {evidence.columns.map((column, columnIndex) => (
+                  <TableCell
+                    key={`${column}-${columnIndex}`}
+                    className="max-w-56 truncate font-mono text-stat"
+                    title={formatValue(row[columnIndex])}
+                  >
+                    {formatValue(row[columnIndex])}
+                  </TableCell>
+                ))}
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+        {totalRows > previewRows.length && (
+          <>
+            <Separator />
+            <p className="px-3 py-2 text-caption text-muted-foreground">
+              Showing the first {previewRows.length} of {totalRows} rows.
+            </p>
+          </>
+        )}
+      </div>
       <p className="font-mono text-stat break-all text-muted-foreground">
         Fingerprint: {evidence.result_fingerprint ?? "not available"}
       </p>
@@ -700,61 +720,131 @@ function EvidenceView({ evidence }: { evidence: Evidence }) {
   )
 }
 
-function ToolTimeline({ calls }: { calls: ToolCall[] }) {
+function SupportingDetails({
+  goldSql,
+  goldResult,
+  calls,
+}: {
+  goldSql?: string | null
+  goldResult?: GoldResult | null
+  calls: ToolCall[]
+}) {
+  const plannerCalls = calls.filter((call) => call.agent === "planner").length
+  const judgeCalls = calls.filter((call) => call.agent === "judge").length
+
   return (
-    <section className="mt-10" aria-labelledby="timeline-heading">
-      <div className="mb-5">
+    <section className="mt-10" aria-labelledby="details-heading">
+      <div className="mb-4">
         <p className="text-caption font-semibold tracking-[0.18em] text-muted-foreground uppercase">
-          Execution trace
+          Supporting details
         </p>
         <h2
-          id="timeline-heading"
+          id="details-heading"
           className="mt-1 font-heading text-xl font-medium"
         >
-          Tool call timeline
+          Reference and diagnostics
         </h2>
       </div>
-      <div className="border">
-        {calls.map((call) => (
-          <div
-            key={call.id}
-            className="grid grid-cols-[24px_minmax(0,1fr)_auto] items-start gap-3 border-b px-5 py-4 last:border-b-0"
-          >
-            <CodeIcon className="mt-0.5 text-muted-foreground" />
-            <div className="min-w-0">
-              <p className="font-mono text-xs font-medium">
-                {call.tool_name ?? "Unknown tool"}
-              </p>
-              <p className="mt-1 font-mono text-stat text-muted-foreground">
-                {call.tool_call_id}
-              </p>
-              <ToolPayload label="Parameters" value={call.parameters} />
-              {call.output !== undefined && (
-                <ToolPayload label="Output" value={call.output} />
-              )}
-              {call.error && (
-                <p className="mt-2 text-xs text-destructive">{call.error}</p>
-              )}
-            </div>
-            <div className="text-right">
+      <Accordion multiple className="border">
+        {goldSql && (
+          <AccordionItem value="benchmark" className="px-4">
+            <AccordionTrigger>
+              <span className="flex flex-col gap-0.5">
+                <span>Gold standard SQL and output</span>
+                <span className="text-caption font-normal text-muted-foreground">
+                  Benchmark reference
+                  {goldResult && !goldResult.error
+                    ? ` · ${goldResult.row_count} ${goldResult.row_count === 1 ? "row" : "rows"}`
+                    : ""}
+                </span>
+              </span>
+            </AccordionTrigger>
+            <AccordionContent className="pb-4">
+              <pre className="overflow-x-auto border-l-2 border-primary bg-muted/50 px-4 py-3 font-mono text-caption leading-5 text-foreground">
+                <code>{format(goldSql, { language: "postgresql" })}</code>
+              </pre>
+              <GoldResultView result={goldResult} />
+            </AccordionContent>
+          </AccordionItem>
+        )}
+        <AccordionItem value="tools" className="px-4">
+          <AccordionTrigger>
+            <span className="flex flex-col gap-0.5">
+              <span>Tool call timeline</span>
+              <span className="text-caption font-normal text-muted-foreground">
+                {plannerCalls} planner · {judgeCalls} judge
+              </span>
+            </span>
+          </AccordionTrigger>
+          <AccordionContent className="pb-4">
+            <ToolTimeline calls={calls} />
+          </AccordionContent>
+        </AccordionItem>
+      </Accordion>
+    </section>
+  )
+}
+
+function ToolTimeline({ calls }: { calls: ToolCall[] }) {
+  return (
+    <ol className="flex flex-col divide-y">
+      {calls.map((call) => (
+        <li
+          key={call.id}
+          className={cn(
+            "grid grid-cols-[20px_minmax(0,1fr)] items-start gap-3 py-3 pl-3 border-b last:border-b-0",
+            call.agent === "judge"
+              ? "border-l-2 border-l-foreground "
+              : call.agent === "planner"
+                ? "border-l-2 border-l-primary"
+                : "border-l-2 border-l-muted-foreground/30"
+          )}
+        >
+          <CodeIcon className="mt-0.5 text-muted-foreground" />
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex flex-wrap items-center gap-2">
+                <p className="font-mono text-xs font-medium">
+                  {call.tool_name ?? "Unknown tool"}
+                </p>
+                <AgentBadge agent={call.agent} />
+              </div>
               <Badge variant="outline" className="uppercase">
                 {call.status}
               </Badge>
-              {call.duration_ms !== null && (
-                <p className="mt-1 font-mono text-stat text-muted-foreground">
-                  {call.duration_ms} ms
-                </p>
-              )}
             </div>
+            <p className="mt-1 truncate font-mono text-stat text-muted-foreground">
+              {call.tool_call_id}
+              {call.duration_ms !== null ? ` · ${call.duration_ms} ms` : ""}
+            </p>
+            <ToolPayload label="Parameters" value={call.parameters} />
+            {call.output !== undefined && (
+              <ToolPayload label="Output" value={call.output} />
+            )}
+            {call.error && (
+              <p className="mt-2 text-xs text-destructive">{call.error}</p>
+            )}
           </div>
-        ))}
-        {calls.length === 0 && (
-          <p className="px-5 py-8 text-center text-xs text-muted-foreground">
-            No tool calls were recorded.
-          </p>
-        )}
-      </div>
-    </section>
+        </li>
+      ))}
+      {calls.length === 0 && (
+        <li className="px-5 py-8 text-center text-xs text-muted-foreground">
+          No tool calls were recorded.
+        </li>
+      )}
+    </ol>
+  )
+}
+
+function AgentBadge({ agent }: { agent?: string | null }) {
+  const label = agent || "system"
+  return (
+    <Badge
+      variant={agent === "planner" ? "secondary" : "outline"}
+      className="uppercase"
+    >
+      {label}
+    </Badge>
   )
 }
 
@@ -771,13 +861,20 @@ function ToolPayload({ label, value }: { label: string; value: unknown }) {
   )
 }
 
-function VerificationBadge({ status }: { status: string }) {
+function VerificationBadge({
+  status,
+  compact = false,
+}: {
+  status: string
+  compact?: boolean
+}) {
   return (
     <Badge
       variant={status.toUpperCase() === "FAILED" ? "destructive" : "secondary"}
-      className={`uppercase ${status.toUpperCase() === "FAILED" ? "bg-destructive text-white dark:bg-destructive" : "bg-primary text-white dark:bg-primary/80"}`}
+      className="shrink-0 uppercase"
     >
-      Verification: {status.replace("_", " ")}
+      {!compact && "Verification: "}
+      {status.replaceAll("_", " ")}
     </Badge>
   )
 }
