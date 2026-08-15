@@ -154,6 +154,11 @@ export function RunReviewer({ run, isLoading, error }: RunReviewerProps) {
         <header className="flex flex-col gap-4">
           <div className="flex flex-wrap items-center gap-2">
             <VerificationBadge status={run.verification?.status ?? "PENDING"} />
+            {run.judge?.score && (
+              <Badge variant="outline" className="uppercase">
+                Judge {run.judge.score.replaceAll("_", " ")}
+              </Badge>
+            )}
             <Badge variant="outline" className="capitalize">
               RUN {run.status}
             </Badge>

@@ -5,7 +5,7 @@ import uuid
 import verifier
 from benchmark.bird import random_question
 from db import DB
-from types.common import EventType
+from domain_types import EventType
 from logger import logger
 from planner import PlanAgent
 from provenance.query_log import QueryLog

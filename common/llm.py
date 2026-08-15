@@ -1,4 +1,4 @@
-"""Configures the LLM model for the planner agent."""
+"""Configures the LLM model for agent use."""
 
 import os
 

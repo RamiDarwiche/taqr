@@ -5,8 +5,8 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, Field, model_validator
 
-from types.common import ClaimType
-from types.common import Numeric
+from domain_types.common import ClaimType
+from domain_types.common import Numeric
 
 
 class Claim(BaseModel):

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal
 
 from langchain.messages import AIMessage, ToolMessage
 from langchain_core.runnables import RunnableConfig
@@ -12,14 +12,13 @@ from langgraph.graph import END, MessagesState
 from langgraph.prebuilt import ToolNode
 from sqlalchemy.engine import Engine
 
-from common.tools import SqlTools, make_sql_tools
-from planner.llm import model
+from common.tools import SKIP_SCHEMA_TABLES, SqlTools, make_sql_tools
+from common.llm import model
 from planner.types import PlanAgentOutput
 
 model_name = getattr(model, "model_name", None) or getattr(model, "model", None)
 
 # System prompt and constants for guiding the planner agents' reasoning.
-SKIP_SCHEMA_TABLES = frozenset({"provenance"})
 MAX_SQL_ATTEMPTS = 5
 
 # Queries should be programatically enforce top_k rather than relying on the system prompt
@@ -27,18 +26,16 @@ planner_system_prompt = (
     open("planner/system_prompts/PLANNER_NEW.md").read().replace("{top_k}", "5")
 )
 
-_QUERY_NUDGE = (
-    "You must call sql_db_query now with a single PostgreSQL SELECT that answers "
-    "the user's question using the schema already provided. Do not reply in prose."
-)
+_QUERY_NUDGE = """You must call sql_db_query now with a single PostgreSQL SELECT that answers 
+the user's question using the schema already provided. Do not reply in prose.
+"""
 
-_EMIT_CLAIMS_PROMPT = (
-    "Using only successful sql_db_query tool results already in this conversation, "
-    "emit claims and evidence. Copy sql and rows verbatim from tool output — "
-    "never invent or round values. Derive columns from SELECT aliases. "
-    "Set result_fingerprint to null. Every evidence_ids entry must match an "
-    "evidence.id you include."
-)
+_EMIT_CLAIMS_PROMPT = """Using only successful sql_db_query tool results already in this conversation, 
+emit claims and evidence. Copy sql and rows verbatim from tool output — 
+never invent or round values. Derive columns from SELECT aliases. 
+Set result_fingerprint to null. Every evidence_ids entry must match an 
+evidence.id you include.
+"""
 
 
 @dataclass(frozen=True)
@@ -114,15 +111,22 @@ class PlannerNodes:
         llm_with_tools = model.bind_tools([self.tools.query])
         response = llm_with_tools.invoke(messages, config=config)
 
-        # Query nudge if the model has not yet attempted a query
-        if not _has_run_query(state) and not response.tool_calls:
+        has_sql = bool(
+            response.tool_calls and _sql_from_tool_call(response.tool_calls[0])
+        )
+        # Query nudge if the model has not yet attempted a usable query
+        if not _has_run_query(state) and not has_sql:
             response = llm_with_tools.invoke(
                 messages + [{"role": "user", "content": _QUERY_NUDGE}],
                 config=config,
             )
+            has_sql = bool(
+                response.tool_calls and _sql_from_tool_call(response.tool_calls[0])
+            )
 
-        # Only allow tool-call turns from here
-        if response.tool_calls:
+        # Only allow tool-call turns that include an executable statement.
+        # Malformed calls (empty args) used to KeyError in check_query as 'query'.
+        if has_sql:
             return {"messages": [response]}
         return {}
 
@@ -140,16 +144,24 @@ class PlannerNodes:
             "content": planner_system_prompt,
         }
         original = state["messages"][-1].tool_calls[0]
-        candidate_query = original["args"]["query"]
+        candidate_query = _sql_from_tool_call(original)
+        if not candidate_query:
+            return {}
+
         user_message = {"role": "user", "content": candidate_query}
         llm_with_tools = model.bind_tools([self.tools.query])
         response = llm_with_tools.invoke([system_message, user_message], config=config)
 
-        # If the model reviewed in prose and skipped the tool call, execute the
-        # original candidate so the graph does not stall.
-        if not response.tool_calls:
-            response = _forced_tool_call("sql_db_query", {"query": candidate_query})
-
+        reviewed_sql = (
+            _sql_from_tool_call(response.tool_calls[0])
+            if getattr(response, "tool_calls", None)
+            else None
+        )
+        # Always emit a well-formed sql_db_query call so ToolNode gets `query`.
+        response = _forced_tool_call(
+            "sql_db_query",
+            {"query": reviewed_sql or candidate_query},
+        )
         response.id = state["messages"][-1].id
         return {"messages": [response]}
 
@@ -175,6 +187,39 @@ def _tables_csv_from_state(state: MessagesState) -> str:
             ]
             return ", ".join(names)
     return ""
+
+
+def _as_dict(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    dump = getattr(value, "model_dump", None)
+    if callable(dump):
+        dumped = dump()
+        if isinstance(dumped, dict):
+            return dumped
+    args = getattr(value, "args", None)
+    name = getattr(value, "name", None)
+    if args is not None or name is not None:
+        return {"name": name, "args": args}
+    return {}
+
+
+def _sql_from_tool_call(tool_call: Any) -> str | None:
+    """Pull a SQL string out of a tool call, regardless of arg shape. """
+    data = _as_dict(tool_call)
+    args = data.get("args", data.get("arguments"))
+    if isinstance(args, str) and args.strip():
+        return args.strip()
+    args = _as_dict(args)
+    lowered = {str(key).lower(): value for key, value in args.items()}
+    for key in ("query", "sql", "__arg1"):
+        value = lowered.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    strings = [v.strip() for v in args.values() if isinstance(v, str) and v.strip()]
+    if len(strings) == 1:
+        return strings[0]
+    return None
 
 
 def _forced_tool_call(name: str, args: dict) -> AIMessage:
@@ -250,7 +295,8 @@ def should_continue(
 
     1. If completed ``sql_db_query`` results reach :data:`MAX_SQL_ATTEMPTS`,
        go to ``emit_claims``.
-    2. If the last message has tool calls, go to ``check_query``.
+    2. If the last message has a tool call with extractable SQL, go to
+       ``check_query``.
     3. If at least one query has already run, go to ``emit_claims``.
     4. Otherwise end the graph (``END`` / ``__end__``).
 
@@ -264,7 +310,8 @@ def should_continue(
         return "emit_claims"
 
     last_message = state["messages"][-1]
-    if getattr(last_message, "tool_calls", None):
+    tool_calls = getattr(last_message, "tool_calls", None)
+    if tool_calls and _sql_from_tool_call(tool_calls[0]):
         return "check_query"
     if attempts > 0:
         return "emit_claims"

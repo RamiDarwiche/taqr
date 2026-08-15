@@ -8,7 +8,7 @@ from sqlalchemy import Engine, text
 from logger import logger
 
 if TYPE_CHECKING:
-    from planner.schemas import Evidence
+    from domain_types import Evidence
 
 
 def _truncate(value: Any, limit: int = 4000) -> Any:

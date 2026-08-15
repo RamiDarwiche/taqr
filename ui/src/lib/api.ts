@@ -115,10 +115,23 @@ export interface GoldResult {
   error?: string | null
 }
 
+export interface ClaimAssessment {
+  claim_id: string
+  supported: boolean
+  notes?: string
+}
+
+export interface JudgeVerdict {
+  score: string
+  reasoning: string
+  claim_assessments: ClaimAssessment[]
+}
+
 export interface RunDetail extends RunSummary {
   claims: Claim[]
   evidence: Evidence[]
   verification: Verification | null
+  judge?: JudgeVerdict | null
   tool_calls: ToolCall[]
   error?: string
   session_id?: string

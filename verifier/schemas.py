@@ -4,7 +4,7 @@ import uuid
 
 from pydantic import BaseModel, Field
 
-from types.common import VerificationStatus
+from domain_types import VerificationStatus
 from planner.types import PlanAgentOutput
 
 

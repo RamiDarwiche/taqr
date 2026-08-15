@@ -2,7 +2,7 @@ from decimal import Decimal
 
 from sqlalchemy import create_engine, text
 
-from planner.types import Evidence
+from domain_types import Evidence
 from provenance.utils import (
     _canonicalize_value,
     attach_result_fingerprints,

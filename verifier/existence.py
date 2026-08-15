@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from planner.types import Claim, ExistenceSpec
+from domain_types import Claim, ExistenceSpec
 from verifier.base import fail, finalize_claim, pass_check
 from verifier.context import VerificationContext
 from verifier.domain_common import collect_rows, require_contract

@@ -9,7 +9,7 @@ from uuid import UUID
 from sqlalchemy import inspect, text
 from sqlalchemy.engine import Engine
 
-from types.common import EventType, RunStatus
+from domain_types import EventType, RunStatus
 from provenance.ddl import (
     _EVENTS_TABLE__DDL,
     _MODELS_TABLE__DDL,

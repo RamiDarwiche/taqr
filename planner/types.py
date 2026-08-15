@@ -1,7 +1,14 @@
 from __future__ import annotations
 
 from pydantic import BaseModel
-from types.claims import Claim, Evidence
+from domain_types.claims import Claim, Evidence
+
+__all__ = [
+    "Claim",
+    "Evidence",
+    "PlanAgentOutput",
+    "QueryResponsePayload",
+]
 
 
 class PlanAgentOutput(BaseModel):

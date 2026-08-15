@@ -5,8 +5,7 @@ from typing import Any
 
 from sqlalchemy import create_engine, text
 
-from types.common import ClaimType, VerificationStatus
-from planner.types import Claim, Evidence
+from domain_types import Claim, ClaimType, Evidence, VerificationStatus
 from verifier.schemas import ClaimVerification
 from verifier.top_k_ranking import (
     _check_monotonic,

@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 from enum import Enum
-from pydantic import BaseModel
+
+from pydantic import BaseModel, Field
 
 
 class JudgeScore(str, Enum):
@@ -12,6 +13,15 @@ class JudgeScore(str, Enum):
     VERY_CONFIDENT = "VERY_CONFIDENT"
 
 
+class ClaimAssessment(BaseModel):
+    """Per-claim semantic judgement from independent database checks."""
+
+    claim_id: str
+    supported: bool
+    notes: str = ""
+
+
 class JudgeAgentOutput(BaseModel):
     score: JudgeScore
     reasoning: str
+    claim_assessments: list[ClaimAssessment] = Field(default_factory=list)

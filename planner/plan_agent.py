@@ -10,13 +10,11 @@ from langgraph.graph import END, START, MessagesState, StateGraph
 
 from common.callbacks import ProvenanceToolCallback
 from db import DB
-from types.common import ClaimType, EventType, RunStatus
+from domain_types import Claim, ClaimType, EventType, Evidence, RunStatus
 from logger import logger
 from planner.nodes import emit_claims, make_planner_nodes, model_name, should_continue
 from planner.progress import pretty_step
 from planner.types import (
-    Claim,
-    Evidence,
     PlanAgentOutput,
     QueryResponsePayload,
 )

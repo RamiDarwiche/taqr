@@ -16,9 +16,9 @@ from collections.abc import Callable
 
 from sqlalchemy import Engine
 
-from types.common import ClaimType, VerificationStatus
+from domain_types import Claim, ClaimType, Evidence, VerificationStatus
 from logger import logger
-from planner.types import Claim, Evidence, PlanAgentOutput
+from planner.types import PlanAgentOutput
 from provenance import QueryLog
 from provenance.utils import fingerprint_rows
 from verifier import (
@@ -354,7 +354,7 @@ def verify_metrics_and_filters(
             if value is not None
         }
         available_literals = {
-            literal
+            literal.casefold()
             for replay in referenced
             for literal in filter_literals(replay.query)
         }

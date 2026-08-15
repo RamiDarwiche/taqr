@@ -1,6 +1,6 @@
-from types.common import ClaimType
+from domain_types import Claim, ClaimType, Evidence
 from planner.plan_agent import PlanAgent
-from planner.types import Claim, Evidence, PlanAgentOutput, QueryResponsePayload
+from planner.types import PlanAgentOutput, QueryResponsePayload
 
 __all__ = [
     "PlanAgent",

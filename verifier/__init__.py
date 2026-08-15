@@ -1,4 +1,4 @@
-from types.common import VerificationStatus
+from domain_types import VerificationStatus
 from verifier.base import (
     fail,
     finalize_claim,

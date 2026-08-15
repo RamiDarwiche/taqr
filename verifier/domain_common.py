@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TypeVar
 
-from planner.types import Claim
+from domain_types import Claim
 from verifier.base import fail, pass_check
 from verifier.context import VerificationContext
 from verifier.schemas import ClaimVerification

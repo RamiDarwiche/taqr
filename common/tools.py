@@ -8,6 +8,8 @@ from sqlalchemy import Engine, inspect, text
 
 from provenance.utils import _canonicalize_value
 
+SKIP_SCHEMA_TABLES = frozenset({"provenance"})
+
 
 def _quote_ident(name: str) -> str:
     return '"' + name.replace('"', '""') + '"'
@@ -35,6 +37,7 @@ def _format_table_schema(engine: Engine, table: str) -> str:
 
 class SqlTools(NamedTuple):
     list_tables: BaseTool
+    list_schemas: BaseTool
     schema: BaseTool
     query: BaseTool
 
@@ -44,8 +47,17 @@ def make_sql_tools(engine: Engine) -> SqlTools:
 
     @tool
     def sql_db_list_tables() -> str:
-        """Input is an empty string, output is a comma-separated list of tables in the database."""
+        """Returns a comma-separated list of tables in the database."""
         return ", ".join(_list_table_names(engine))
+
+    @tool
+    def sql_db_list_schemas() -> str:
+        """Returns CREATE TABLE DDL for every table except provenance."""
+        return "\n\n".join(
+            _format_table_schema(engine, table)
+            for table in _list_table_names(engine)
+            if table not in SKIP_SCHEMA_TABLES
+        )
 
     @tool
     def sql_db_schema(table_names: str) -> str:
@@ -107,6 +119,7 @@ def make_sql_tools(engine: Engine) -> SqlTools:
 
     return SqlTools(
         list_tables=sql_db_list_tables,
+        list_schemas=sql_db_list_schemas,
         schema=sql_db_schema,
         query=sql_db_query,
     )

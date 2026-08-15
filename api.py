@@ -29,8 +29,11 @@ from benchmark.bird import (
     random_question,
 )
 from db import DB
-from types.common import EventType
+from domain_types import EventType
+from logger import logger
+from planner.types import PlanAgentOutput
 from provenance.query_log import QueryLog
+from verifier.judge import JudgeAgent
 
 ALLOWED_SCHEMAS = frozenset({"public", "provenance"})
 MAX_PAGE_SIZE = 200
@@ -74,6 +77,7 @@ def _normalize_run_detail(
 ) -> dict[str, Any]:
     plan_payload: dict[str, Any] = {}
     verification: dict[str, Any] | None = None
+    judge: dict[str, Any] | None = None
     tool_events: list[dict[str, Any]] = []
 
     for event in events:
@@ -83,6 +87,8 @@ def _normalize_run_detail(
             plan_payload = payload
         elif event_type == EventType.QUERY_VERIFICATION.value:
             verification = payload
+        elif event_type == EventType.QUERY_JUDGE.value:
+            judge = payload
         elif event_type == EventType.TOOL_CALL.value:
             tool_events.append(_event_view(event))
 
@@ -134,6 +140,7 @@ def _normalize_run_detail(
             "claims": plan.get("claims", []),
             "evidence": plan.get("evidence", []),
             "verification": verification,
+            "judge": judge,
             "tool_calls": tool_calls,
             "tool_events": tool_events,
         }
@@ -222,12 +229,13 @@ def _wants_event_stream(request: Request, stream: bool) -> bool:
 
 def _finalize_run(
     *,
-    plan: Any,
+    plan: PlanAgentOutput,
     question: str,
     session_id: str,
     run_id: str,
     db: DB,
     query_log: QueryLog,
+    judge_agent: JudgeAgent,
     benchmark: dict[str, object] | None,
 ) -> dict[str, Any]:
     from verifier.verifier import verify_response
@@ -256,6 +264,22 @@ def _finalize_run(
         EventType.QUERY_VERIFICATION,
         verification_payload,
     )
+
+    try:
+        judge_agent.judge(plan, session_id, run_id)
+    except Exception as exc:
+        logger.exception("Judge agent failed")
+        query_log.log_event(
+            run_id,
+            EventType.QUERY_JUDGE,
+            {
+                "score": "VERY_UNCONFIDENT",
+                "reasoning": f"Judge failed: {exc}",
+                "claim_assessments": [],
+                "error": str(exc),
+            },
+        )
+
     metadata = query_log.get_run_metadata(run_id)
     if metadata is None:
         raise RuntimeError("Completed run was not persisted")
@@ -272,6 +296,7 @@ def _stream_create_run(
     session_id: str,
     run_id: str,
     plan_agent: Any,
+    judge_agent: JudgeAgent,
     db: DB,
     query_log: QueryLog,
     benchmark: dict[str, object] | None,
@@ -302,11 +327,20 @@ def _stream_create_run(
                 "phase": "verify",
             },
         )
+        yield _sse(
+            "status",
+            {
+                "title": "Judging",
+                "detail": "Independently checking claims against the database",
+                "phase": "judge",
+            },
+        )
         detail = _finalize_run(
             plan=plan,
             question=question,
             session_id=session_id,
             run_id=run_id,
+            judge_agent=judge_agent,
             db=db,
             query_log=query_log,
             benchmark=benchmark,
@@ -344,6 +378,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.db = db
     app.state.query_log = query_log
     app.state.plan_agent = PlanAgent(db, query_log)
+    app.state.judge_agent = JudgeAgent(db, query_log)
     try:
         yield
     finally:
@@ -375,6 +410,7 @@ def create_app(
         query_log: QueryLog = request.app.state.query_log
         db: DB = request.app.state.db
         plan_agent = request.app.state.plan_agent
+        judge_agent = request.app.state.judge_agent
         benchmark = _resolve_benchmark(
             question_id=body.question_id,
             question=body.question,
@@ -392,6 +428,7 @@ def create_app(
                     session_id=session_id,
                     run_id=run_id,
                     plan_agent=plan_agent,
+                    judge_agent=judge_agent,
                     db=db,
                     query_log=query_log,
                     benchmark=benchmark,
@@ -413,6 +450,7 @@ def create_app(
                 run_id=run_id,
                 db=db,
                 query_log=query_log,
+                judge_agent=judge_agent,
                 benchmark=benchmark,
             )
         except Exception as exc:

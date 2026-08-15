@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from types.common import VerificationStatus
+from domain_types import VerificationStatus
 from logger import logger
 from verifier.schemas import ClaimVerification
 
