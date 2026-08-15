@@ -92,6 +92,39 @@ export function TaqrApp() {
     }
   }, [selectedRunId, submitting])
 
+  useEffect(() => {
+    if (
+      !run ||
+      !selectedRunId ||
+      run.id !== selectedRunId ||
+      run.judge_status !== "running"
+    ) {
+      return
+    }
+
+    let active = true
+    let timer: ReturnType<typeof setTimeout>
+
+    const pollJudge = async () => {
+      try {
+        const detail = await api.getRun(selectedRunId)
+        if (!active) return
+        setRun(detail)
+        if (detail.judge_status === "running") {
+          timer = setTimeout(pollJudge, 1500)
+        }
+      } catch {
+        if (active) timer = setTimeout(pollJudge, 3000)
+      }
+    }
+
+    timer = setTimeout(pollJudge, 1500)
+    return () => {
+      active = false
+      clearTimeout(timer)
+    }
+  }, [run, selectedRunId])
+
   const loadTable = useCallback(
     async (table: TableReference, offset: number) => {
       setTableLoading(true)

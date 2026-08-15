@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import AsyncIterator, Callable, Iterator
+from concurrent.futures import Executor, ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from datetime import date, datetime
 from decimal import Decimal
@@ -124,6 +125,12 @@ def _normalize_run_detail(
             gold_result = _execute_gold_sql(engine, str(benchmark["gold_sql"]))
             benchmark["result"] = gold_result
 
+    judge_status = "not_started"
+    if verification is not None:
+        judge_status = "running"
+    if judge is not None:
+        judge_status = "failed" if judge.get("error") else "completed"
+
     return _json_safe(
         {
             **metadata,
@@ -141,6 +148,7 @@ def _normalize_run_detail(
             "evidence": plan.get("evidence", []),
             "verification": verification,
             "judge": judge,
+            "judge_status": judge_status,
             "tool_calls": tool_calls,
             "tool_events": tool_events,
         }
@@ -235,7 +243,6 @@ def _finalize_run(
     run_id: str,
     db: DB,
     query_log: QueryLog,
-    judge_agent: JudgeAgent,
     benchmark: dict[str, object] | None,
 ) -> dict[str, Any]:
     from verifier.verifier import verify_response
@@ -265,6 +272,24 @@ def _finalize_run(
         verification_payload,
     )
 
+    metadata = query_log.get_run_metadata(run_id)
+    if metadata is None:
+        raise RuntimeError("Completed run was not persisted")
+    return _normalize_run_detail(
+        metadata,
+        query_log.get_run_events(run_id),
+        engine=db.get_engine(),
+    )
+
+
+def _run_judge(
+    *,
+    plan: PlanAgentOutput,
+    session_id: str,
+    run_id: str,
+    judge_agent: JudgeAgent,
+    query_log: QueryLog,
+) -> None:
     try:
         judge_agent.judge(plan, session_id, run_id)
     except Exception as exc:
@@ -280,13 +305,23 @@ def _finalize_run(
             },
         )
 
-    metadata = query_log.get_run_metadata(run_id)
-    if metadata is None:
-        raise RuntimeError("Completed run was not persisted")
-    return _normalize_run_detail(
-        metadata,
-        query_log.get_run_events(run_id),
-        engine=db.get_engine(),
+
+def _submit_judge(
+    *,
+    executor: Executor,
+    plan: PlanAgentOutput,
+    session_id: str,
+    run_id: str,
+    judge_agent: JudgeAgent,
+    query_log: QueryLog,
+) -> None:
+    executor.submit(
+        _run_judge,
+        plan=plan,
+        session_id=session_id,
+        run_id=run_id,
+        judge_agent=judge_agent,
+        query_log=query_log,
     )
 
 
@@ -297,6 +332,7 @@ def _stream_create_run(
     run_id: str,
     plan_agent: Any,
     judge_agent: JudgeAgent,
+    judge_executor: Executor,
     db: DB,
     query_log: QueryLog,
     benchmark: dict[str, object] | None,
@@ -327,23 +363,22 @@ def _stream_create_run(
                 "phase": "verify",
             },
         )
-        yield _sse(
-            "status",
-            {
-                "title": "Judging",
-                "detail": "Independently checking claims against the database",
-                "phase": "judge",
-            },
-        )
         detail = _finalize_run(
             plan=plan,
             question=question,
             session_id=session_id,
             run_id=run_id,
-            judge_agent=judge_agent,
             db=db,
             query_log=query_log,
             benchmark=benchmark,
+        )
+        _submit_judge(
+            executor=judge_executor,
+            plan=plan,
+            session_id=session_id,
+            run_id=run_id,
+            judge_agent=judge_agent,
+            query_log=query_log,
         )
         yield _sse("done", {"run": detail})
     except Exception as exc:
@@ -379,9 +414,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.query_log = query_log
     app.state.plan_agent = PlanAgent(db, query_log)
     app.state.judge_agent = JudgeAgent(db, query_log)
+    app.state.judge_executor = ThreadPoolExecutor(
+        max_workers=2, thread_name_prefix="taqr-judge"
+    )
     try:
         yield
     finally:
+        app.state.judge_executor.shutdown(wait=True)
         query_log.close()
         db.disconnect()
 
@@ -411,6 +450,7 @@ def create_app(
         db: DB = request.app.state.db
         plan_agent = request.app.state.plan_agent
         judge_agent = request.app.state.judge_agent
+        judge_executor = request.app.state.judge_executor
         benchmark = _resolve_benchmark(
             question_id=body.question_id,
             question=body.question,
@@ -429,6 +469,7 @@ def create_app(
                     run_id=run_id,
                     plan_agent=plan_agent,
                     judge_agent=judge_agent,
+                    judge_executor=judge_executor,
                     db=db,
                     query_log=query_log,
                     benchmark=benchmark,
@@ -450,8 +491,15 @@ def create_app(
                 run_id=run_id,
                 db=db,
                 query_log=query_log,
-                judge_agent=judge_agent,
                 benchmark=benchmark,
+            )
+            _submit_judge(
+                executor=judge_executor,
+                plan=plan,
+                session_id=session_id,
+                run_id=run_id,
+                judge_agent=judge_agent,
+                query_log=query_log,
             )
         except Exception as exc:
             raise HTTPException(status_code=500, detail=str(exc)) from exc

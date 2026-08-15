@@ -33,6 +33,7 @@ import type {
   ClaimVerification,
   Evidence,
   GoldResult,
+  JudgeStatus,
   RunDetail,
   ToolCall,
 } from "@/lib/api"
@@ -147,6 +148,7 @@ export function RunReviewer({ run, isLoading, error }: RunReviewerProps) {
       result,
     ]) ?? []
   )
+  const judgeStatus = getJudgeStatus(run)
 
   return (
     <ScrollArea className="h-full">
@@ -157,6 +159,12 @@ export function RunReviewer({ run, isLoading, error }: RunReviewerProps) {
             {run.judge?.score && (
               <Badge variant="outline" className="uppercase">
                 Judge {run.judge.score.replaceAll("_", " ")}
+              </Badge>
+            )}
+            {judgeStatus === "running" && (
+              <Badge variant="outline" className="uppercase">
+                <CircleNotchIcon className="animate-spin" />
+                Judging
               </Badge>
             )}
             <Badge variant="outline" className="capitalize">
@@ -195,6 +203,8 @@ export function RunReviewer({ run, isLoading, error }: RunReviewerProps) {
             </ol>
           )}
         </header>
+
+        <JudgeReview run={run} status={judgeStatus} />
 
         <Separator className="my-8 md:my-10" />
 
@@ -278,6 +288,119 @@ export function RunReviewer({ run, isLoading, error }: RunReviewerProps) {
       </main>
     </ScrollArea>
   )
+}
+
+function JudgeReview({ run, status }: { run: RunDetail; status: JudgeStatus }) {
+  if (status === "not_started") return null
+
+  if (status === "running") {
+    return (
+      <section
+        aria-live="polite"
+        aria-busy="true"
+        className="mt-7 flex items-start gap-3 border bg-muted/40 px-4 py-3"
+      >
+        <CircleNotchIcon className="mt-0.5 size-4 shrink-0 animate-spin text-primary" />
+        <div>
+          <p className="text-xs font-medium">Independent review in progress</p>
+          <p className="mt-1 text-caption leading-4 text-muted-foreground">
+            The judge is checking the claims against the database. You can
+            review this run while it works.
+          </p>
+        </div>
+      </section>
+    )
+  }
+
+  const report = run.judge
+  if (!report) return null
+
+  const failed = status === "failed"
+  const claimsById = new Map(run.claims.map((claim) => [claim.id, claim]))
+
+  return (
+    <section id="judge-report" aria-live="polite" className="mt-7 border">
+      <div className="flex flex-wrap items-center justify-between gap-3 bg-muted/40 px-4 py-3">
+        <div className="flex items-center gap-2">
+          {failed ? (
+            <WarningCircleIcon className="size-4 text-destructive" />
+          ) : (
+            <CheckCircleIcon className="size-4 text-primary" weight="fill" />
+          )}
+          <div>
+            <p className="text-xs font-medium">
+              {failed ? "Judge review unavailable" : "Judge report ready"}
+            </p>
+            <p className="text-caption text-muted-foreground">
+              Independent semantic review
+            </p>
+          </div>
+        </div>
+        <Badge
+          variant={failed ? "destructive" : "outline"}
+          className="uppercase"
+        >
+          {report.score.replaceAll("_", " ")}
+        </Badge>
+      </div>
+
+      <details>
+        <summary className="cursor-pointer border-t px-4 py-3 text-xs font-medium text-primary hover:underline">
+          View judge report
+        </summary>
+        <div className="flex flex-col gap-5 border-t px-4 py-4">
+          <div>
+            <p className="text-stat font-semibold tracking-[0.14em] text-muted-foreground uppercase">
+              Reasoning
+            </p>
+            <p className="mt-2 text-sm leading-6">{report.reasoning}</p>
+          </div>
+
+          {report.claim_assessments.length > 0 && (
+            <div>
+              <p className="text-stat font-semibold tracking-[0.14em] text-muted-foreground uppercase">
+                Claim assessments
+              </p>
+              <ul className="mt-2 flex flex-col divide-y border">
+                {report.claim_assessments.map((assessment) => (
+                  <li
+                    key={assessment.claim_id}
+                    className="flex items-start gap-3 px-3 py-3"
+                  >
+                    {assessment.supported ? (
+                      <CheckCircleIcon
+                        className="mt-0.5 size-4 shrink-0 text-primary"
+                        weight="fill"
+                      />
+                    ) : (
+                      <XCircleIcon className="mt-0.5 size-4 shrink-0 text-destructive" />
+                    )}
+                    <div className="min-w-0">
+                      <p className="text-xs leading-5 font-medium">
+                        {claimsById.get(assessment.claim_id)?.claim_text ??
+                          assessment.claim_id}
+                      </p>
+                      {assessment.notes && (
+                        <p className="mt-1 text-caption leading-5 text-muted-foreground">
+                          {assessment.notes}
+                        </p>
+                      )}
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </div>
+      </details>
+    </section>
+  )
+}
+
+function getJudgeStatus(run: RunDetail): JudgeStatus {
+  if (run.judge_status) return run.judge_status
+  if (run.judge) return run.judge.error ? "failed" : "completed"
+  return run.verification ? "running" : "not_started"
 }
 
 // TODO: add typing for status

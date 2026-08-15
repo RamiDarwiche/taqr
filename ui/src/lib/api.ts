@@ -125,13 +125,17 @@ export interface JudgeVerdict {
   score: string
   reasoning: string
   claim_assessments: ClaimAssessment[]
+  error?: string
 }
+
+export type JudgeStatus = "not_started" | "running" | "completed" | "failed"
 
 export interface RunDetail extends RunSummary {
   claims: Claim[]
   evidence: Evidence[]
   verification: Verification | null
   judge?: JudgeVerdict | null
+  judge_status?: JudgeStatus
   tool_calls: ToolCall[]
   error?: string
   session_id?: string
