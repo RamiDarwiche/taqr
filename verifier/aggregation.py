@@ -3,15 +3,22 @@
 from __future__ import annotations
 
 from decimal import Decimal
+from typing import Any
 
 from domain_types import AggregationSpec, Claim
-from verifier.base import fail, finalize_claim, pass_check
-from verifier.context import VerificationContext
-from verifier.domain_common import collect_rows, require_contract
+from verifier.base import confirm, finalize_claim, inconclusive, refute
+from verifier.context import EvidenceReplay, VerificationContext
+from verifier.domain_common import (
+    collect_rows,
+    replay_columns,
+    resolve_replay_column,
+    resolve_spec,
+    verify_untyped,
+)
+from verifier.resolve import resolve_subject, values_equal
 from verifier.schemas import ClaimVerification
 from verifier.sql_analysis import (
     aggregate_names,
-    column_index,
     has_group_by,
     numbers_equal,
     to_decimal,
@@ -31,68 +38,75 @@ def verify(
     context: VerificationContext,
     result: ClaimVerification,
 ) -> ClaimVerification:
-    spec = require_contract(
+    spec = resolve_spec(
         claim,
         AggregationSpec,
         result,
         prefix="aggregation",
     )
     if spec is None:
-        return result
+        verify_untyped(claim, context, result, prefix="aggregation")
+        return finalize_claim(result)
 
     cited = context.cited(claim.evidence_ids)
     relevant = [
         replay
         for replay in cited
-        if column_index(replay.evidence, spec.value_column) is not None
+        if resolve_replay_column(replay, spec.value_column) is not None
     ]
     if not relevant:
-        return fail(
+        inconclusive(
             result,
             check="aggregation_columns",
-            reason=(
-                f"No cited evidence resolves required column "
-                f"{spec.value_column!r}"
-            ),
+            note=f"no cited evidence resolves value column {spec.value_column!r}",
         )
+        return finalize_claim(result)
     if any(
         replay.query is None
         or not _matches_operation(spec.operation, aggregate_names(replay.query))
         for replay in relevant
     ):
-        return fail(
+        return refute(
             result,
             check="aggregation_sql_shape",
             reason=f"Evidence does not compute declared {spec.operation} aggregate",
         )
-    if spec.scope == "scalar" and any(
+    confirm(result, "aggregation_sql_shape")
+
+    # The declared scope is a description of the evidence, and the evidence
+    # itself says which shape it has. A breakdown query cited by a claim about
+    # one group is grouped evidence regardless of what the spec says.
+    grouped = any(
         replay.query is not None and has_group_by(replay.query) for replay in relevant
-    ):
-        return fail(
+    )
+    scope = "grouped" if grouped else "scalar"
+    if scope != spec.scope:
+        inconclusive(
             result,
-            check="aggregation_sql_shape",
-            reason="Scalar aggregation evidence must not contain GROUP BY",
+            check="aggregation_scope",
+            note=(
+                f"contract declares {spec.scope} scope but the evidence is "
+                f"{scope}; verifying as {scope}"
+            ),
         )
-    if spec.scope == "grouped" and any(
-        replay.query is not None and not has_group_by(replay.query)
-        for replay in relevant
-    ):
-        return fail(
-            result,
-            check="aggregation_sql_shape",
-            reason="Grouped aggregation evidence requires GROUP BY",
-        )
-    pass_check(result, "aggregation_sql_shape")
+    else:
+        confirm(result, "aggregation_scope")
 
     columns = [spec.value_column]
-    if spec.scope == "grouped":
-        if not spec.subject_column or not isinstance(claim.subject, str):
-            return fail(
+    selector_column, selector_value = _row_selector(claim, spec, relevant)
+    if scope == "grouped":
+        if selector_column is None:
+            inconclusive(
                 result,
                 check="aggregation_subject",
-                reason="Grouped aggregation requires one subject and subject_column",
+                note=(
+                    "grouped aggregation evidence has no subject or filter that "
+                    "identifies which group the claim is about"
+                ),
             )
-        columns.append(spec.subject_column)
+            return finalize_claim(result)
+        columns.append(selector_column)
+
     records = collect_rows(
         claim,
         context,
@@ -101,32 +115,37 @@ def verify(
         check="aggregation_columns",
     )
     if records is None:
-        return result
+        return finalize_claim(result)
 
-    if spec.scope == "scalar":
+    if scope == "scalar":
         matches = records
         if len(matches) != 1:
-            return fail(
+            return refute(
                 result,
                 check="aggregation_cardinality",
                 reason=f"Scalar aggregation expected one row, got {len(matches)}",
             )
     else:
         matches = [
-            row for row in records if row[spec.subject_column] == claim.subject
+            row
+            for row in records
+            if values_equal(row.get(selector_column), selector_value)
         ]
         if len(matches) != 1:
-            return fail(
+            return refute(
                 result,
                 check="aggregation_subject",
-                reason=f"Grouped subject must resolve to one row, got {len(matches)}",
+                reason=(
+                    f"Group {selector_value!r} must resolve to one row in "
+                    f"{selector_column!r}, got {len(matches)}"
+                ),
             )
-        pass_check(result, "aggregation_subject")
-    pass_check(result, "aggregation_cardinality")
+        confirm(result, "aggregation_subject")
+    confirm(result, "aggregation_cardinality")
 
     actual = matches[0][spec.value_column]
     if not numbers_equal(actual, spec.expected_value):
-        return fail(
+        return refute(
             result,
             check="aggregation_value",
             reason=(
@@ -136,23 +155,65 @@ def verify(
         )
     numeric = to_decimal(actual)
     if numeric is None:
-        return fail(
+        return refute(
             result,
             check="aggregation_value",
             reason=f"Aggregate value is not numeric: {actual!r}",
         )
     if spec.operation == "COUNT" and numeric != numeric.to_integral_value():
-        return fail(
+        return refute(
             result,
             check="aggregation_invariant",
             reason=f"COUNT result must be integral, got {actual!r}",
         )
     if (spec.operation == "COUNT" or spec.non_negative) and numeric < Decimal(0):
-        return fail(
+        return refute(
             result,
             check="aggregation_invariant",
             reason=f"Aggregate result must be non-negative, got {actual!r}",
         )
-    pass_check(result, "aggregation_value")
-    pass_check(result, "aggregation_invariant")
+    confirm(result, "aggregation_value")
+    confirm(result, "aggregation_invariant")
     return finalize_claim(result)
+
+
+def _row_selector(
+    claim: Claim,
+    spec: AggregationSpec,
+    relevant: list[EvidenceReplay],
+) -> tuple[str | None, Any]:
+    """Which column and value identify the row a grouped claim is about.
+
+    A subject located in the grouped rows is the strongest form. When there is
+    no subject — "203 accounts have status 'A'" — the claim's own filters name
+    the group, so a filter whose key resolves to a projected column selects the
+    row. Without either, the claim does not say which group it means.
+    """
+    subjects = claim.subject if isinstance(claim.subject, list) else [claim.subject]
+    subject = subjects[0] if len(subjects) == 1 else None
+
+    if subject is not None:
+        for replay in relevant:
+            if replay.rows is None:
+                continue
+            match = resolve_subject(
+                subject,
+                replay_columns(replay),
+                replay.rows,
+                preferred_column=spec.subject_column,
+            )
+            if match is not None and not match.is_composite:
+                return match.columns[0], subject
+        return (spec.subject_column, subject) if spec.subject_column else (None, None)
+
+    for replay in relevant:
+        for key, value in claim.filters.items():
+            if value is None:
+                continue
+            match = resolve_replay_column(replay, key)
+            value_match = resolve_replay_column(replay, spec.value_column)
+            if match is not None and (
+                value_match is None or match.index != value_match.index
+            ):
+                return match.name, value
+    return None, None

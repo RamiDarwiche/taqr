@@ -6,6 +6,8 @@ from typing import Any
 from sqlalchemy import create_engine, text
 
 from domain_types import Claim, ClaimType, Evidence, VerificationStatus
+from tests.verifier.conftest import outcome_of
+from verifier.outcome import CheckOutcome
 from verifier.schemas import ClaimVerification
 from verifier.top_k_ranking import (
     _check_monotonic,
@@ -129,7 +131,9 @@ def test_top_k_sql_shape_requires_order_by():
     assert "missing ORDER BY" in (result.failure_reason or "")
 
 
-def test_top_k_sql_shape_requires_limit_matching_k():
+def test_top_k_limit_mismatch_is_fragile_not_failed():
+    # Over-fetching does not make the claim about the leading row false, so the
+    # shape mismatch is reported without failing the claim.
     result = _verify(
         subject=["Alice"],
         pairs=[("Alice", 10), ("Bob", 9)],
@@ -142,9 +146,57 @@ def test_top_k_sql_shape_requires_limit_matching_k():
         ),
     )
 
-    assert result.status == VerificationStatus.FAILED
-    assert "top_k_sql_shape" in result.checks
-    assert "does not match claim k=1" in (result.failure_reason or "")
+    assert result.status == VerificationStatus.PARTIALLY_VERIFIED
+    assert outcome_of(result, "top_k_sql_shape") is CheckOutcome.INCONCLUSIVE
+    assert any("LIMIT 2 does not match claim k=1" in note for note in result.fragility_notes)
+
+
+def test_top_k_subject_prefix_matches_a_longer_result():
+    result = _verify(
+        subject=["Alice"],
+        pairs=[("Alice", 10), ("Bob", 9)],
+        k=2,
+    )
+
+    assert result.status == VerificationStatus.PARTIALLY_VERIFIED
+    assert outcome_of(result, "top_k_subject") is CheckOutcome.INCONCLUSIVE
+
+
+def test_top_k_subject_matches_across_value_types():
+    # A numeric business key claimed as text is not a contradiction.
+    result = _verify(
+        subject=["12", "7"],
+        pairs=[("12", 10), ("7", 9)],
+        k=2,
+        sql=(
+            "SELECT * FROM ("
+            "SELECT 12 AS subject, 10 AS score "
+            "UNION ALL SELECT 7 AS subject, 9 AS score"
+            ") AS ranking ORDER BY score DESC LIMIT 2"
+        ),
+    )
+
+    assert result.status == VerificationStatus.VERIFIED
+    assert outcome_of(result, "top_k_subject") is CheckOutcome.CONFIRMED
+
+
+def test_top_k_accepts_order_by_the_metric_expression():
+    # ORDER BY the aggregate expression rather than its alias is the same order.
+    result = _verify(
+        subject=["Alice", "Bob"],
+        pairs=[],
+        k=2,
+        metric="score",
+        sql=(
+            "SELECT subject, SUM(score) AS score FROM ("
+            "SELECT 'Alice' AS subject, 10 AS score "
+            "UNION ALL SELECT 'Bob' AS subject, 9 AS score"
+            ") AS ranking GROUP BY subject ORDER BY SUM(score) DESC LIMIT 2"
+        ),
+    )
+
+    assert result.status == VerificationStatus.VERIFIED
+    assert outcome_of(result, "top_k_sql_shape") is CheckOutcome.CONFIRMED
 
 
 def test_top_k_under_k_is_partially_verified():
@@ -200,8 +252,8 @@ def test_top_k_monotonic_fails_when_scores_out_of_order():
     )
 
     assert result.status == VerificationStatus.FAILED
-    assert "top_k_sql_shape" in result.checks
-    assert "must ORDER BY metric" in (result.failure_reason or "")
+    assert outcome_of(result, "top_k_sql_shape") is CheckOutcome.REFUTED
+    assert "rather than the claimed metric 'score'" in (result.failure_reason or "")
 
 
 def test_top_k_monotonic_helper_rejects_out_of_order_scores():
@@ -257,7 +309,8 @@ def test_top_k_negative_metric_fails():
     assert "top_k_non_negative" in result.checks
 
 
-def test_top_k_filters_must_appear_in_sql():
+def test_top_k_unlocatable_filter_is_fragile_not_failed():
+    # A filter the verifier cannot locate is unconfirmed, not contradicted.
     result = _verify(
         subject=["Alice"],
         pairs=[("Alice", 10)],
@@ -265,8 +318,28 @@ def test_top_k_filters_must_appear_in_sql():
         filters={"quarter": "2025-Q4"},
     )
 
+    assert result.status == VerificationStatus.PARTIALLY_VERIFIED
+    assert outcome_of(result, "top_k_filters") is CheckOutcome.INCONCLUSIVE
+
+
+def test_top_k_conflicting_filter_fails():
+    # The claim says 2025-Q4 while the evidence restricts the column to 2024-Q1.
+    result = _verify(
+        subject=["Alice"],
+        pairs=[("Alice", 10)],
+        k=1,
+        filters={"quarter": "2025-Q4"},
+        sql=(
+            "SELECT * FROM ("
+            "SELECT 'Alice' AS subject, 10 AS score, '2024-Q1' AS quarter"
+            ") AS ranking WHERE quarter = '2024-Q1' "
+            "ORDER BY score DESC LIMIT 1"
+        ),
+        columns=["subject", "score", "quarter"],
+    )
+
     assert result.status == VerificationStatus.FAILED
-    assert "top_k_filters" in result.checks
+    assert outcome_of(result, "top_k_filters_conflict") is CheckOutcome.REFUTED
 
 
 def test_top_k_filters_pass_when_present_in_sql():

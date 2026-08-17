@@ -69,6 +69,12 @@ export type VerificationSpec =
       expected_values: Record<string, NumericValue>
       complete: boolean
     }
+  | {
+      kind: "VALUE_LOOKUP"
+      value_column: string
+      expected_value: NumericValue | string
+      subject_column?: string | null
+    }
 
 export interface Claim {
   id: string
@@ -82,12 +88,27 @@ export interface Claim {
   verification_spec?: VerificationSpec | null
 }
 
+export type CheckOutcome =
+  | "CONFIRMED"
+  | "REFUTED"
+  | "INCONCLUSIVE"
+  | "NOT_APPLICABLE"
+
+export interface CheckResult {
+  check: string
+  outcome: CheckOutcome
+  detail?: string | null
+}
+
 export interface ClaimVerification {
   claim_id: string
   status: string
   failure_reason?: string | null
   fragility_notes?: string[] | null
+  /** Check ids only. The id-only projection of `check_results`. */
   checks: string[]
+  /** Per-check outcome and detail. Absent on runs verified before it existed. */
+  check_results?: CheckResult[] | null
 }
 
 export interface Verification {

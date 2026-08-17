@@ -35,6 +35,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip"
 import type {
+  CheckOutcome,
   Claim,
   ClaimVerification,
   Evidence,
@@ -54,13 +55,18 @@ const CHECK_TOOLTIPS: Record<string, string> = {
     "The number of rows returned by replaying the evidence SQL matches the stored evidence row_count.",
   sql_safety:
     "Evidence is exactly one parseable, read-only PostgreSQL query and replayed without error.",
+  row_shape:
+    "Every replayed row is as wide as the declared columns, so columns can be read by position.",
   columns:
-    "Replayed row widths and declared evidence columns agree with the SQL projection.",
+    "Declared evidence column names agree with the SQL projection. A mismatch is a naming defect, not a wrong answer, so it is fragile rather than failed.",
   metric:
-    "The claim’s metric resolves to an exact projected alias in cited evidence.",
-  filters: "Every declared filter value occurs in a WHERE or HAVING predicate.",
+    "The claim’s metric resolves to a projected column of the cited evidence.",
+  filters:
+    "Every declared filter is visible in a predicate, a grouping key, or the replayed rows.",
+  filters_conflict:
+    "No declared filter is contradicted by an equality predicate on the same column.",
   top_k_sql_shape:
-    "Evidence SQL includes ORDER BY and a LIMIT that matches the claim’s k (required for a ranking).",
+    "Evidence SQL orders by the claimed metric, by alias, ordinal, or expression. A missing ORDER BY fails; a LIMIT that disagrees with k is fragile.",
   top_k_k: "The ranking claim includes a required k (top-k size).",
   top_k_row_count:
     "The number of replayed rows matches claim k. Fewer or more rows is treated as fragile underspecification.",
@@ -74,10 +80,13 @@ const CHECK_TOOLTIPS: Record<string, string> = {
     "Adjacent equal metric scores make the ranking under-specified; marked fragile rather than failed.",
   top_k_non_negative: "All metric values in the ranking are non-negative.",
   top_k_filters:
-    "Each ranking filter value occurs in a WHERE or HAVING predicate.",
-  aggregation_contract: "The claim has a matching typed aggregation contract.",
+    "Each ranking filter is visible in a predicate, a grouping key, or the replayed rows.",
+  aggregation_contract:
+    "The claim carries a matching typed aggregation contract. Without one, expected values cannot be checked, so the claim is fragile rather than failed.",
   aggregation_sql_shape:
-    "SQL uses the declared aggregate operation and scalar/grouped shape.",
+    "SQL uses the declared aggregate operation in its outermost query.",
+  aggregation_scope:
+    "The declared scalar/grouped scope matches the shape of the evidence.",
   aggregation_columns: "The declared aggregate columns resolve unambiguously.",
   aggregation_cardinality:
     "The aggregation returns the expected number of rows.",
@@ -105,9 +114,16 @@ const CHECK_TOOLTIPS: Record<string, string> = {
   existence_sql_shape: "Absence evidence has definitive, non-offset semantics.",
   existence_polarity:
     "Rows, count, or boolean evidence agrees with exists/absent.",
-  existence_subject: "A claimed present subject occurs in replayed evidence.",
+  existence_subject:
+    "A claimed present subject occurs in the replayed rows — in one column or across adjacent ones — or is pinned by the evidence predicates.",
   existence_value:
     "Count or boolean existence evidence is valid and unambiguous.",
+  value_lookup_contract:
+    "The claim carries a matching typed lookup contract naming the column read and the value expected.",
+  value_lookup_subject:
+    "The subject of the lookup occurs in the replayed rows or is pinned by the evidence predicates.",
+  value_lookup_value:
+    "The looked-up cell holds the claimed value, and the evidence resolves to exactly one such value.",
   distribution_contract:
     "The claim has a matching typed distribution contract.",
   distribution_sql_shape: "A complete distribution uses grouped aggregate SQL.",
@@ -120,6 +136,13 @@ const CHECK_TOOLTIPS: Record<string, string> = {
   distribution_coverage:
     "The contract intentionally covers only part of a distribution.",
 }
+
+/**
+ * Fallback for a claim with no usable typed contract: all that remains checkable
+ * without expected values is whether the subject occurs in the evidence.
+ */
+const SUBJECT_GROUNDING_TOOLTIP =
+  "With no typed contract to check expected values against, the claim’s subject was looked for in the replayed rows and the evidence predicates."
 
 const PREVIEW_ROW_LIMIT = 8
 
@@ -492,35 +515,11 @@ function ClaimReview({
                   <div className="flex items-center gap-2">
                     <VerificationBadge status={verification.status} />
                   </div>
-                  {verification.checks.length > 0 && (
-                    <ul className="flex flex-col gap-2">
-                      {verification.checks.map((check, checkIndex) => (
-                        <li
-                          key={`${check}-${checkIndex}`}
-                          className="flex items-start gap-2 text-muted-foreground"
-                        >
-                          <CheckCircleIcon className="mt-0.5 shrink-0 text-primary" />
-                          <VerificationCheckLabel check={check} />
-                        </li>
-                      ))}
-                    </ul>
-                  )}
+                  <CheckList verification={verification} />
                   {verification.failure_reason && (
                     <p className="border-l-2 border-destructive pl-3 text-caption break-words text-destructive">
                       Failure: {verification.failure_reason}
                     </p>
-                  )}
-                  {verification.fragility_notes && (
-                    <ul className="flex flex-col gap-2 border-l-2 border-yellow-500 pl-3">
-                      {verification.fragility_notes.map((note, noteIndex) => (
-                        <li
-                          key={`${note}-${noteIndex}`}
-                          className="text-caption text-yellow-600/80"
-                        >
-                          Fragility note: {note}
-                        </li>
-                      ))}
-                    </ul>
                   )}
                 </div>
               ) : (
@@ -536,8 +535,102 @@ function ClaimReview({
   )
 }
 
+/** Icon and colour per outcome, so a check that did not pass never reads as passed. */
+const CHECK_OUTCOME_STYLES: Record<
+  CheckOutcome,
+  { icon: typeof CheckCircleIcon; className: string; label: string }
+> = {
+  CONFIRMED: {
+    icon: CheckCircleIcon,
+    className: "text-primary",
+    label: "confirmed by the evidence",
+  },
+  REFUTED: {
+    icon: XCircleIcon,
+    className: "text-destructive",
+    label: "contradicted by the evidence",
+  },
+  INCONCLUSIVE: {
+    icon: WarningCircleIcon,
+    className: "text-yellow-600",
+    label: "could not be established either way",
+  },
+  NOT_APPLICABLE: {
+    icon: CircleIcon,
+    className: "text-muted-foreground/50",
+    label: "does not apply to this claim",
+  },
+}
+
+function CheckList({ verification }: { verification: ClaimVerification }) {
+  const results = verification.check_results ?? []
+
+  // Runs verified before graded outcomes existed recorded ids alone; their
+  // notes live in fragility_notes and cannot be attributed to a check.
+  if (results.length === 0) {
+    if (verification.checks.length === 0) return null
+    return (
+      <>
+        <ul className="flex flex-col gap-2">
+          {verification.checks.map((check, index) => (
+            <li
+              key={`${check}-${index}`}
+              className="flex items-start gap-2 text-muted-foreground"
+            >
+              <CircleIcon className="mt-0.5 shrink-0 text-muted-foreground/50" />
+              <VerificationCheckLabel check={check} />
+            </li>
+          ))}
+        </ul>
+        {verification.fragility_notes?.map((note, index) => (
+          <p
+            key={`${note}-${index}`}
+            className="border-l-2 border-yellow-500 pl-3 text-caption break-words text-yellow-600/80"
+          >
+            Fragility note: {note}
+          </p>
+        ))}
+      </>
+    )
+  }
+
+  return (
+    <ul className="flex flex-col gap-2">
+      {results.map((result, index) => {
+        const style = CHECK_OUTCOME_STYLES[result.outcome]
+        const Icon = style.icon
+        return (
+          <li key={`${result.check}-${index}`} className="flex flex-col gap-1">
+            <div className="flex items-start gap-2 text-muted-foreground">
+              <Icon
+                className={cn("mt-0.5 shrink-0", style.className)}
+                aria-label={style.label}
+              />
+              <VerificationCheckLabel check={result.check} />
+            </div>
+            {result.detail && result.outcome !== "CONFIRMED" && (
+              <p
+                className={cn(
+                  "ml-6 text-caption break-words",
+                  result.outcome === "REFUTED"
+                    ? "text-destructive"
+                    : "text-yellow-600/80",
+                )}
+              >
+                {result.detail}
+              </p>
+            )}
+          </li>
+        )
+      })}
+    </ul>
+  )
+}
+
 function VerificationCheckLabel({ check }: { check: string }) {
-  const description = CHECK_TOOLTIPS[check]
+  const description = check.endsWith("_subject_grounding")
+    ? SUBJECT_GROUNDING_TOOLTIP
+    : CHECK_TOOLTIPS[check]
   if (!description) {
     return <span className="font-mono text-xs">{check}</span>
   }
@@ -803,7 +896,7 @@ function ToolTimeline({ calls }: { calls: ToolCall[] }) {
           <CodeIcon className="mt-0.5 text-muted-foreground" />
           <div className="min-w-0">
             <div className="flex flex-wrap items-center justify-between gap-2">
-              <div className="flex flex-wrap items-center gap-2">
+              <div className="flex flex-wrap items-baseline gap-2">
                 <p className="font-mono text-xs font-medium">
                   {call.tool_name ?? "Unknown tool"}
                 </p>

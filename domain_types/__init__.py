@@ -6,6 +6,7 @@ from domain_types.claims import (
     Evidence,
     ExistenceSpec,
     TrendSpec,
+    ValueLookupSpec,
     VerificationSpec,
 )
 from domain_types.common import (
@@ -28,6 +29,7 @@ __all__ = [
     "Numeric",
     "RunStatus",
     "TrendSpec",
+    "ValueLookupSpec",
     "VerificationSpec",
     "VerificationStatus",
 ]

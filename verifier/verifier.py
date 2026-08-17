@@ -4,8 +4,9 @@ To add a verifier for a new ``ClaimType``:
 
 1. Create ``verifier/<name>.py`` with
    ``verify(claim, context, result) -> ClaimVerification``.
-2. Use helpers from ``verifier.base`` (``fail``, ``mark_fragile``,
-   ``pass_check``, ``finalize_claim``, ``is_failed``) for all status updates.
+2. Update status only through ``verifier.base`` (``confirm``, ``refute``,
+   ``inconclusive``, ``not_applicable``, ``finalize_claim``, ``is_failed``), so
+   the severity policy in :data:`~verifier.outcome.GROUNDING_CHECKS` applies.
 3. Register the function in ``CLAIM_VERIFIERS`` below.
 """
 
@@ -28,11 +29,16 @@ from verifier import (
     existence,
     top_k_ranking,
     trend,
+    value_lookup,
 )
-from verifier.base import fail, is_failed, pass_check
+from verifier.base import confirm, inconclusive, is_failed, refute
 from verifier.context import VerificationContext, build_context
+from verifier.domain_common import resolve_replay_column
+from verifier.filters import reconcile_filters
+from verifier.outcome import CheckOutcome
+from verifier.resolve import resolve_column
 from verifier.schemas import ClaimVerification, VerifiedResponse
-from verifier.sql_analysis import filter_literals, selected_aliases
+from verifier.sql_analysis import projection_names, projects_star
 
 ClaimVerifier = Callable[
     [Claim, VerificationContext, ClaimVerification],
@@ -47,6 +53,7 @@ CLAIM_VERIFIERS: dict[ClaimType, ClaimVerifier] = {
     ClaimType.TREND: trend.verify,
     ClaimType.EXISTENCE: existence.verify,
     ClaimType.DISTRIBUTION: distribution.verify,
+    ClaimType.VALUE_LOOKUP: value_lookup.verify,
 }
 
 
@@ -80,7 +87,7 @@ def _fail_all(
     """Fail every claim without hiding an earlier, more specific failure."""
     for result in verified.claim_results:
         for check in checks:
-            pass_check(result, check)
+            confirm(result, check)
         if not is_failed(result):
             result.status = VerificationStatus.FAILED
             result.failure_reason = reason
@@ -194,7 +201,7 @@ def verify_evidence_refs(
             continue
 
         if not claim.evidence_ids:
-            fail(
+            refute(
                 result,
                 check="evidence_refs",
                 reason=f"claim {claim.id} has empty evidence_ids",
@@ -203,14 +210,14 @@ def verify_evidence_refs(
 
         missing = [eid for eid in claim.evidence_ids if eid not in evidence_ids]
         if missing:
-            fail(
+            refute(
                 result,
                 check="evidence_refs",
                 reason=(f"claim {claim.id} references unknown evidence ids: {missing}"),
             )
             continue
 
-        pass_check(result, "evidence_refs")
+        confirm(result, "evidence_refs")
 
     referenced_ids = {item_id for claim in claims for item_id in claim.evidence_ids}
     unreferenced = sorted(evidence_ids - referenced_ids)
@@ -235,11 +242,11 @@ def verify_replays(
         if replay.error or replay.query is None or replay.rows is None:
             reason = f"Evidence {evidence_id} is not safely replayable: {replay.error}"
             for result in referencing:
-                fail(result, check="sql_safety", reason=reason)
+                refute(result, check="sql_safety", reason=reason)
             continue
 
         for result in referencing:
-            pass_check(result, "sql_safety")
+            confirm(result, "sql_safety")
 
         rows = replay.rows
         if len(rows) != item.row_count:
@@ -248,42 +255,30 @@ def verify_replays(
                 f"expected {item.row_count}, got {len(rows)}"
             )
             for result in referencing:
-                fail(result, check="row_count", reason=reason)
+                refute(result, check="row_count", reason=reason)
             continue
         for result in referencing:
-            pass_check(result, "row_count")
+            confirm(result, "row_count")
 
-        if not item.columns or any(len(row) != len(item.columns) for row in rows):
-            reason = f"Evidence {evidence_id} rows do not match declared columns"
-            for result in referencing:
-                fail(result, check="columns", reason=reason)
-            continue
-        aliases = selected_aliases(replay.query)
-        if (
-            aliases
-            and "*" not in aliases
-            and (
-                len(aliases) != len(item.columns)
-                or any(
-                    alias.casefold() != column.casefold()
-                    for alias, column in zip(aliases, item.columns, strict=True)
-                )
-            )
-        ):
+        # Row width is structural: a row narrower than the declared columns
+        # cannot be read positionally, so any column reference is unsound.
+        if rows and any(len(row) != len(item.columns) for row in rows):
             reason = (
-                f"Evidence {evidence_id} declared columns {item.columns} "
-                f"do not match SQL projections {aliases}"
+                f"Evidence {evidence_id} rows are {len(rows[0])} wide but declare "
+                f"{len(item.columns)} columns"
             )
             for result in referencing:
-                fail(result, check="columns", reason=reason)
+                refute(result, check="row_shape", reason=reason)
             continue
         for result in referencing:
-            pass_check(result, "columns")
+            confirm(result, "row_shape")
+
+        _check_declared_columns(item, replay, referencing)
 
         if not item.result_fingerprint:
             reason = f"Evidence {evidence_id} has no result fingerprint"
             for result in referencing:
-                fail(result, check="hash", reason=reason)
+                refute(result, check="hash", reason=reason)
             continue
         actual = fingerprint_rows(rows)
         if actual != item.result_fingerprint:
@@ -292,14 +287,57 @@ def verify_replays(
                 f"expected {item.result_fingerprint}, got {actual}"
             )
             for result in referencing:
-                fail(result, check="hash", reason=reason)
+                refute(result, check="hash", reason=reason)
             continue
 
         logger.info(f"Hash verified for evidence {evidence_id}")
         for result in referencing:
-            pass_check(result, "hash")
+            confirm(result, "hash")
 
     return verified
+
+
+def _check_declared_columns(
+    item: Evidence,
+    replay: object,
+    referencing: list[ClaimVerification],
+) -> None:
+    """Compare declared column names with the SQL projection.
+
+    Declared names are the planner's transcription of a projection the query
+    tool never returned headers for, so a mismatch is a naming defect. Column
+    references are resolved against the projection anyway, which is why this
+    reports fragility instead of failing: an unaliased ``MAX(price)`` has no
+    alias to copy, and ``SELECT *`` has no projection list at all.
+    """
+    query = getattr(replay, "query", None)
+    if query is None:
+        return
+    if projects_star(query):
+        for result in referencing:
+            confirm(result, "columns", detail="projection expands *; names unchecked")
+        return
+    names = projection_names(query)
+    declared = list(item.columns or [])
+    if not names:
+        return
+    if len(names) == len(declared) and all(
+        left.casefold() == right.casefold()
+        for left, right in zip(names, declared, strict=True)
+    ):
+        for result in referencing:
+            confirm(result, "columns")
+        return
+    resolvable = len(declared) == len(names) and all(
+        resolve_column(names, name) is not None for name in declared if name
+    )
+    note = (
+        f"evidence {item.id} declares columns {declared} but its projection is "
+        f"{names}"
+        + ("; names still resolve" if resolvable else "")
+    )
+    for result in referencing:
+        inconclusive(result, check="columns", note=note)
 
 
 def verify_metrics_and_filters(
@@ -307,7 +345,13 @@ def verify_metrics_and_filters(
     context: VerificationContext,
     verified: VerifiedResponse,
 ) -> VerifiedResponse:
-    """Resolve metric aliases and filter literals in cited query ASTs."""
+    """Ground the claim's metric name and filter map in its cited evidence.
+
+    Both are descriptive annotations rather than assertions about the data, so
+    neither can hard-fail a claim on its own. The one exception is a filter that
+    an equality predicate on the same column positively contradicts: that means
+    the claim describes a scope its evidence does not have.
+    """
     results_by_id = {r.claim_id: r for r in verified.claim_results}
 
     for claim in claims:
@@ -321,54 +365,74 @@ def verify_metrics_and_filters(
             if replay.query is not None
         ]
         if not referenced:
-            fail(
+            refute(
                 result,
-                check="metric",
+                check="sql_safety",
                 reason=(
-                    f"Claim {claim.id} references no known evidence for metric check"
+                    f"Claim {claim.id} cites no evidence that parsed into a query"
                 ),
             )
             continue
 
-        if claim.metric:
-            metric = claim.metric.casefold()
-            if not any(
-                metric in {alias.casefold() for alias in selected_aliases(replay.query)}
-                or metric in {column.casefold() for column in replay.evidence.columns}
-                for replay in referenced
-            ):
-                fail(
-                    result,
-                    check="metric",
-                    reason=(
-                        f"Metric {claim.metric!r} is not an exact projected alias "
-                        f"for claim {claim.id}"
-                    ),
-                )
-                continue
-            pass_check(result, "metric")
-
-        expected_filters = {
-            str(value).casefold()
-            for value in claim.filters.values()
-            if value is not None
-        }
-        available_literals = {
-            literal.casefold()
-            for replay in referenced
-            for literal in filter_literals(replay.query)
-        }
-        missing_filters = sorted(expected_filters - available_literals)
-        if missing_filters:
-            fail(
-                result,
-                check="filters",
-                reason=(
-                    f"Claim filters are absent from WHERE/HAVING literals: "
-                    f"{missing_filters}"
-                ),
-            )
-            continue
-        pass_check(result, "filters")
+        _verify_metric(claim, referenced, result)
+        _verify_filters(claim, referenced, result)
 
     return verified
+
+
+def _verify_metric(
+    claim: Claim,
+    referenced: list[object],
+    result: ClaimVerification,
+) -> None:
+    """Resolve the claim's metric name to a projected column."""
+    if not claim.metric:
+        return
+    best = None
+    for replay in referenced:
+        match = resolve_replay_column(replay, claim.metric)  # type: ignore[arg-type]
+        if match is None:
+            continue
+        if not match.is_approximate:
+            confirm(result, "metric")
+            return
+        best = match
+    if best is not None:
+        inconclusive(
+            result,
+            check="metric",
+            note=(
+                f"metric {claim.metric!r} matches projected column {best.name!r} "
+                f"only approximately"
+            ),
+        )
+        return
+    inconclusive(
+        result,
+        check="metric",
+        note=(
+            f"metric {claim.metric!r} does not resolve to a projected column of "
+            f"the cited evidence"
+        ),
+    )
+
+
+def _verify_filters(
+    claim: Claim,
+    referenced: list[object],
+    result: ClaimVerification,
+) -> None:
+    """Locate every declared filter in predicates, grouping keys, or rows."""
+    if not claim.filters:
+        return
+    unresolved = False
+    for finding in reconcile_filters(claim.filters, referenced):  # type: ignore[arg-type]
+        if finding.outcome is CheckOutcome.CONFIRMED:
+            continue
+        if finding.outcome is CheckOutcome.REFUTED:
+            refute(result, check="filters_conflict", reason=finding.detail)
+            return
+        unresolved = True
+        inconclusive(result, check="filters", note=finding.detail)
+    if not unresolved:
+        confirm(result, "filters")

@@ -45,11 +45,13 @@ For each planner claim, check:
 
 The typed verifier already covers replay fingerprints, LIMIT/ORDER shape, and spec-vs-row consistency. Do not spend queries repeating those checks.
 
+It deliberately does *not* judge whether the cited SQL asks the right question of the right tables — that is yours. Where it reports fragility (a filter it could not locate, an absent typed contract, a subject matched only after normalization), the claim went unchecked in that respect rather than being wrong, so those are the places your independent query is worth the most.
+
 ### 1c. Type-specific playbooks
 
 Use the playbook that matches the **user question**. If the planner picked a different `claim_type`, still run the playbook for the question and treat the mismatch as a defect.
 
-**EXISTENCE** ("is there…", "does … exist", "are there any…", "has anyone…"):
+**EXISTENCE** ("is there…", "does … exist", "are there any…", "has anyone…"). A question answered with a *value* is a `VALUE_LOOKUP`, not an existence check; treat that miscasting as a defect and judge the value:
 
 - Confirm polarity: present vs absent is the actual question, not a ranking or a count-for-its-own-sake.
 - Probe the tables/columns that would contain the asked-for entity or event; do not accept a hit in an unrelated table.
@@ -61,6 +63,12 @@ Use the playbook that matches the **user question**. If the planner picked a dif
 **RANKING / TOP-K:** Independent ordered query on the asked-for metric and grain; subjects and k should match the question, not a convenient LIMIT.
 
 **AGGREGATION:** Independent aggregate on the asked-for measure and scope (scalar vs grouped); operation must match the English.
+
+**VALUE_LOOKUP** ("what is X's Y", "what was the … for …"):
+
+- Read the attribute independently for the same subject, resolving the subject through the same identifying columns the question names.
+- Confirm the subject is uniquely identified. Two people sharing a surname, or a subject appearing in several rows, makes the answer ill-defined even when the cited cell is real.
+- Check the value is reported as stored, not reformatted or rounded into something the database does not hold.
 
 **COMPARISON:** Both sides, same grain, operator the question uses ("more than", "at least", "equal").
 

@@ -10,10 +10,12 @@ from langchain.messages import AIMessage, ToolMessage
 from langchain_core.runnables import RunnableConfig
 from langgraph.graph import END, MessagesState
 from langgraph.prebuilt import ToolNode
+from pydantic import ValidationError
 from sqlalchemy.engine import Engine
 
 from common.tools import SKIP_SCHEMA_TABLES, SqlTools, make_sql_tools
 from common.llm import model
+from logger import logger
 from planner.types import PlanAgentOutput
 
 model_name = getattr(model, "model_name", None) or getattr(model, "model", None)
@@ -249,6 +251,44 @@ def _sql_attempt_count(state: MessagesState) -> int:
     )
 
 
+def _validate_output(payload: Any) -> PlanAgentOutput:
+    """Validate the model's answer, dropping an unusable spec rather than the answer.
+
+    A ``verification_spec`` whose shape contradicts its ``claim_type`` is the one
+    invalid field the rest of a claim does not depend on: the verifier treats a
+    missing contract as something it cannot confirm, and still checks replay
+    integrity, filters, and subject grounding. Discarding the spec therefore
+    costs some verification depth, where raising costs the whole answer.
+
+    Any other validation error still raises, because a claim that cannot name its
+    evidence, or evidence that cannot state its rows, is not an answer.
+    """
+    try:
+        return PlanAgentOutput.model_validate(payload)
+    except ValidationError as first_error:
+        offending = {
+            error["loc"][1]
+            for error in first_error.errors()
+            if len(error["loc"]) >= 2
+            and error["loc"][0] == "claims"
+            and isinstance(error["loc"][1], int)
+        }
+        claims = payload.get("claims") if isinstance(payload, dict) else None
+        if not offending or not isinstance(claims, list):
+            raise
+        for index in offending:
+            claim = claims[index] if index < len(claims) else None
+            if not isinstance(claim, dict) or claim.get("verification_spec") is None:
+                raise
+            logger.warning(
+                f"Dropping unusable verification_spec from claim {index}: "
+                f"{claim.get('claim_type')} claim carried "
+                f"{claim['verification_spec'].get('kind')!r}"
+            )
+            claim["verification_spec"] = None
+        return PlanAgentOutput.model_validate(payload)
+
+
 def emit_claims(state: MessagesState, config: RunnableConfig):
     """Produce structured claims and evidence from successful query results.
 
@@ -277,7 +317,7 @@ def emit_claims(state: MessagesState, config: RunnableConfig):
         config=config,
     )
     if not isinstance(result, PlanAgentOutput):
-        result = PlanAgentOutput.model_validate(result)
+        result = _validate_output(result)
 
     return {
         "messages": [AIMessage(content=result.model_dump_json())],

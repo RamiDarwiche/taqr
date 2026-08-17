@@ -10,6 +10,7 @@ Numeric = Union[int, float, Decimal]
 class ClaimType(str, Enum):
     RANKING_TOP_K = "RANKING_TOP_K"
     AGGREGATION = "AGGREGATION"
+    VALUE_LOOKUP = "VALUE_LOOKUP"
     COMPARISON = "COMPARISON"
     TREND = "TREND"
     EXISTENCE = "EXISTENCE"

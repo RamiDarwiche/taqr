@@ -3,14 +3,16 @@
 from __future__ import annotations
 
 from domain_types import Claim, ComparisonSpec
-from verifier.base import fail, finalize_claim, pass_check
+from verifier.base import confirm, finalize_claim, inconclusive, refute
 from verifier.context import VerificationContext
-from verifier.domain_common import collect_rows, require_contract
+from verifier.domain_common import collect_rows, resolve_spec, verify_untyped
+from verifier.resolve import subject_list, values_equal
 from verifier.schemas import ClaimVerification
 from verifier.sql_analysis import (
     compare_numbers,
     derived_change,
     numbers_equal,
+    reported_numbers_equal,
 )
 
 
@@ -19,28 +21,38 @@ def verify(
     context: VerificationContext,
     result: ClaimVerification,
 ) -> ClaimVerification:
-    spec = require_contract(
+    spec = resolve_spec(
         claim,
         ComparisonSpec,
         result,
         prefix="comparison",
     )
     if spec is None:
-        return result
-    if spec.left_subject == spec.right_subject:
-        return fail(
+        verify_untyped(claim, context, result, prefix="comparison")
+        return finalize_claim(result)
+    if values_equal(spec.left_subject, spec.right_subject):
+        return refute(
             result,
             check="comparison_subjects",
             reason="Comparison subjects must be distinct",
         )
-    if not isinstance(claim.subject, list) or not {
-        spec.left_subject,
-        spec.right_subject,
-    }.issubset(set(claim.subject)):
-        return fail(
+
+    declared = subject_list(claim.subject)
+    missing = [
+        side
+        for side in (spec.left_subject, spec.right_subject)
+        if not any(values_equal(side, item) for item in declared)
+    ]
+    if missing:
+        # The compared entities live in the contract; claim.subject is a label
+        # for display. A mismatch is a labelling defect, not a false comparison.
+        inconclusive(
             result,
             check="comparison_subjects",
-            reason="Claim subject must include both comparison subjects",
+            note=(
+                f"claim subject {claim.subject!r} does not list compared "
+                f"entities {missing!r}"
+            ),
         )
 
     records = collect_rows(
@@ -51,16 +63,14 @@ def verify(
         check="comparison_columns",
     )
     if records is None:
-        return result
-    by_subject: dict[str, list[object]] = {}
-    for row in records:
-        by_subject.setdefault(str(row[spec.subject_column]), []).append(
-            row[spec.value_column]
-        )
-    left_values = by_subject.get(spec.left_subject, [])
-    right_values = by_subject.get(spec.right_subject, [])
+        return finalize_claim(result)
+
+    left_values = _values_for(records, spec.subject_column, spec.value_column, spec.left_subject)
+    right_values = _values_for(
+        records, spec.subject_column, spec.value_column, spec.right_subject
+    )
     if len(left_values) != 1 or len(right_values) != 1:
-        return fail(
+        return refute(
             result,
             check="comparison_subjects",
             reason=(
@@ -68,39 +78,43 @@ def verify(
                 f"got {len(left_values)} and {len(right_values)}"
             ),
         )
-    pass_check(result, "comparison_subjects")
+    confirm(result, "comparison_subjects")
 
     left = left_values[0]
     right = right_values[0]
     if not numbers_equal(left, spec.expected_left_value) or not numbers_equal(
         right, spec.expected_right_value
     ):
-        return fail(
+        return refute(
             result,
             check="comparison_values",
-            reason="Replayed comparison operands do not match expected values",
+            reason=(
+                f"Replayed comparison operands {left!r} and {right!r} do not "
+                f"match expected {spec.expected_left_value!r} and "
+                f"{spec.expected_right_value!r}"
+            ),
         )
-    pass_check(result, "comparison_values")
+    confirm(result, "comparison_values")
 
     relation = compare_numbers(left, spec.operator, right)
     if relation is not True:
-        return fail(
+        return refute(
             result,
             check="comparison_relation",
             reason=f"Declared relation {spec.operator} does not hold",
         )
-    pass_check(result, "comparison_relation")
+    confirm(result, "comparison_relation")
 
     if spec.delta_mode is not None and spec.expected_delta is not None:
         delta = derived_change(right, left, spec.delta_mode)
         if delta is None:
-            return fail(
+            return refute(
                 result,
                 check="comparison_delta",
                 reason="Comparison delta is undefined (non-numeric or zero baseline)",
             )
-        if not numbers_equal(delta, spec.expected_delta):
-            return fail(
+        if not reported_numbers_equal(delta, spec.expected_delta):
+            return refute(
                 result,
                 check="comparison_delta",
                 reason=(
@@ -108,6 +122,20 @@ def verify(
                     f"{spec.expected_delta}"
                 ),
             )
-        pass_check(result, "comparison_delta")
+        confirm(result, "comparison_delta")
 
     return finalize_claim(result)
+
+
+def _values_for(
+    records: list[dict[str, object]],
+    subject_column: str,
+    value_column: str,
+    subject: str,
+) -> list[object]:
+    """Values whose subject cell matches ``subject`` by canonical form."""
+    return [
+        row[value_column]
+        for row in records
+        if values_equal(row[subject_column], subject)
+    ]

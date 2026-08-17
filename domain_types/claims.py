@@ -101,6 +101,22 @@ class ExistenceSpec(BaseModel):
     exists: bool
     mode: Literal["rows", "count", "boolean"] = "rows"
     result_column: str | None = None
+    #: Optional hint. The verifier searches every column and adjacent-column
+    #: composite for the subject, so a subject split across columns (a forename
+    #: and a surname) needs no declaration here.
+    subject_column: str | None = None
+
+
+class ValueLookupSpec(BaseModel):
+    """A single attribute read for one subject.
+
+    ``expected_value`` accepts text because looked-up attributes are frequently
+    not numbers — a lap time of ``"1:23.796"``, a status code, a category.
+    """
+
+    kind: Literal["VALUE_LOOKUP"] = "VALUE_LOOKUP"
+    value_column: str
+    expected_value: Numeric | str
     subject_column: str | None = None
 
 
@@ -114,6 +130,11 @@ class DistributionSpec(BaseModel):
 
 
 VerificationSpec = Annotated[
-    AggregationSpec | ComparisonSpec | TrendSpec | ExistenceSpec | DistributionSpec,
+    AggregationSpec
+    | ComparisonSpec
+    | TrendSpec
+    | ExistenceSpec
+    | DistributionSpec
+    | ValueLookupSpec,
     Field(discriminator="kind"),
 ]
