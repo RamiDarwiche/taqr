@@ -22,20 +22,23 @@ MAX_SQL_ATTEMPTS = 6
 judge_system_prompt = open("verifier/judge/system_prompts/JUDGE.md").read()
 
 JUDGE_KICKOFF = (
-    "Load the database catalog and table schemas. Planner claims to evaluate "
-    "independently will follow."
+    "Load the database catalog and table schemas. The user question and "
+    "planner claims to evaluate independently will follow."
 )
 
 _QUERY_NUDGE = (
     "You must call sql_db_query now with a read-only PostgreSQL SELECT that "
-    "independently tests a planner claim. Do not re-run the planner's SQL "
-    "unchanged. Do not reply in prose."
+    "independently tests whether the planner answered the user question. "
+    "Do not re-run the planner's SQL unchanged. Do not reply in prose."
 )
 
-_EMIT_VERDICT_PROMPT = """Using only schema context and your own sql_db_query results, emit
-JudgeAgentOutput. Do not treat planner SQL or evidence.rows as ground 
-truth. Every planner claim must appear in claim_assessments. If you ran 
-no successful independent query, score at most UNCONFIDENT.
+_EMIT_VERDICT_PROMPT = """Using only schema context, the user question, and your
+own sql_db_query results, emit JudgeAgentOutput. Do not treat planner SQL
+or evidence.rows as ground truth. First judge whether the planner answered
+the user question (intent, tables, claim types, result shape). Then assess
+each claim. Every planner claim must appear in claim_assessments. If you
+ran no successful independent query, or the plan is a poor fit for the
+question, score at most UNCONFIDENT.
 """
 
 
@@ -43,6 +46,7 @@ class JudgeAgentState(MessagesState):
     """Full judge graph state. Nodes typed as MessagesState only receive messages."""
 
     plan: PlanAgentOutput
+    question: NotRequired[str]
     verdict: NotRequired[JudgeAgentOutput | None]
 
 
@@ -113,18 +117,19 @@ def make_judge_nodes(engine: Engine) -> JudgeNodes:
 
 
 def present_plan(state: JudgeAgentState, config: RunnableConfig):
-    """Append the planner claims/evidence after schema context is in history."""
+    """Append the user question and planner claims after schema context is in history."""
+    configurable = (config or {}).get("configurable") or {}
     plan = state.get("plan")
     if plan is None:
-        configurable = (config or {}).get("configurable") or {}
         plan = configurable.get("plan")
     if plan is None:
         raise ValueError("Judge graph is missing planner output to evaluate")
     if not isinstance(plan, PlanAgentOutput):
         plan = PlanAgentOutput.model_validate(plan)
+    question = state.get("question") or configurable.get("question") or ""
     return {
         "messages": [
-            {"role": "user", "content": _plan_briefing(plan)},
+            {"role": "user", "content": _plan_briefing(plan, question)},
         ]
     }
 
@@ -170,12 +175,15 @@ def should_continue(state: MessagesState) -> Literal["run_query", "emit_verdict"
     return "emit_verdict"
 
 
-def _plan_briefing(plan: PlanAgentOutput) -> str:
+def _plan_briefing(plan: PlanAgentOutput, question: str) -> str:
+    question_block = question.strip() or "(not provided)"
     return (
-        "Independently evaluate the following planner claims and evidence for "
-        "semantic correctness against the live database. Schema context is "
-        "already in this conversation. Do not treat planner SQL or rows as "
-        "ground truth.\n\n"
+        "Independently evaluate whether the planner answered the user question "
+        "and whether its claims are semantically correct against the live "
+        "database. Schema context is already in this conversation. Do not "
+        "treat planner SQL or rows as ground truth.\n\n"
+        f"## User question\n{question_block}\n\n"
+        "## Planner claims and evidence\n"
         f"{plan.model_dump_json(indent=2)}"
     )
 

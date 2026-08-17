@@ -48,18 +48,25 @@ class JudgeAgent:
         plan: PlanAgentOutput,
         session_id: str,
         run_id: str,
+        question: str = "",
     ) -> JudgeAgentOutput:
         logging_callback = ProvenanceToolCallback(self.query_log, run_id, agent="judge")
         verdict: JudgeAgentOutput | None = None
         step_index = 0
 
         for update in self.agent.stream(
-            {"messages": [{"role": "user", "content": JUDGE_KICKOFF}], "plan": plan, "verdict": None},
+            {
+                "messages": [{"role": "user", "content": JUDGE_KICKOFF}],
+                "plan": plan,
+                "question": question,
+                "verdict": None,
+            },
             config={
                 "configurable": {
                     "session_id": session_id,
                     "run_id": run_id,
                     "plan": plan.model_dump(mode="json"),
+                    "question": question,
                 },
                 "callbacks": [logging_callback],
             },

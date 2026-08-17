@@ -285,13 +285,14 @@ def _finalize_run(
 def _run_judge(
     *,
     plan: PlanAgentOutput,
+    question: str,
     session_id: str,
     run_id: str,
     judge_agent: JudgeAgent,
     query_log: QueryLog,
 ) -> None:
     try:
-        judge_agent.judge(plan, session_id, run_id)
+        judge_agent.judge(plan, session_id, run_id, question=question)
     except Exception as exc:
         logger.exception("Judge agent failed")
         query_log.log_event(
@@ -310,6 +311,7 @@ def _submit_judge(
     *,
     executor: Executor,
     plan: PlanAgentOutput,
+    question: str,
     session_id: str,
     run_id: str,
     judge_agent: JudgeAgent,
@@ -318,6 +320,7 @@ def _submit_judge(
     executor.submit(
         _run_judge,
         plan=plan,
+        question=question,
         session_id=session_id,
         run_id=run_id,
         judge_agent=judge_agent,
@@ -375,6 +378,7 @@ def _stream_create_run(
         _submit_judge(
             executor=judge_executor,
             plan=plan,
+            question=question,
             session_id=session_id,
             run_id=run_id,
             judge_agent=judge_agent,
@@ -496,6 +500,7 @@ def create_app(
             _submit_judge(
                 executor=judge_executor,
                 plan=plan,
+                question=body.question,
                 session_id=session_id,
                 run_id=run_id,
                 judge_agent=judge_agent,

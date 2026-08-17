@@ -12,12 +12,12 @@ PHASE_COPY: dict[str, tuple[str, str]] = {
         "Loading column definitions for every table",
     ),
     "present_plan": (
-        "Reviewing planner claims",
-        "Loading claims and evidence to evaluate independently",
+        "Reviewing the question and claims",
+        "Loading the user question with planner claims and evidence",
     ),
     "investigate": (
-        "Checking claims",
-        "Drafting an independent query to test a planner claim",
+        "Checking the question",
+        "Drafting an independent query to test the user question",
     ),
     "run_query": (
         "Running SQL",
@@ -25,7 +25,7 @@ PHASE_COPY: dict[str, tuple[str, str]] = {
     ),
     "emit_verdict": (
         "Forming a verdict",
-        "Scoring semantic correctness of the planner claims",
+        "Scoring whether the plan answers the user question",
     ),
 }
 
